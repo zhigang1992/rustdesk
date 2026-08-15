@@ -308,9 +308,216 @@ class MainFlutterWindow: NSWindow {
                     }
                     result([Double(size.width), Double(size.height)])
 
+                case "showKeystrokeInput":
+                    var title = "Send text as keystrokes"
+                    var send = "Send"
+                    var cancel = "Cancel"
+                    var hint = ""
+                    if let arg = call.arguments as? [String: Any] {
+                        title = (arg["title"] as? String) ?? title
+                        send = (arg["send"] as? String) ?? send
+                        cancel = (arg["cancel"] as? String) ?? cancel
+                        hint = (arg["hint"] as? String) ?? hint
+                    }
+                    KeystrokeInputPanel.present(
+                        title: title,
+                        sendTitle: send,
+                        cancelTitle: cancel,
+                        hint: hint,
+                        completion: { text in
+                            result(text)
+                        }
+                    )
+
                 default:
                     result(FlutterMethodNotImplemented)
                 }
         })
+    }
+}
+
+/// Host-side text box so dictation / IME run on macOS, not the remote session.
+private class KeystrokeInputPanel: NSObject, NSWindowDelegate {
+    static var current: KeystrokeInputPanel?
+
+    private let panel: NSPanel
+    private let textView: NSTextView
+    private var completion: ((String?) -> Void)?
+    private var eventMonitor: Any?
+    private var finished = false
+
+    private init(
+        title: String,
+        sendTitle: String,
+        cancelTitle: String,
+        hint: String,
+        completion: @escaping (String?) -> Void
+    ) {
+        self.completion = completion
+
+        let width: CGFloat = 480
+        let height: CGFloat = 220
+        panel = NSPanel(
+            contentRect: NSRect(x: 0, y: 0, width: width, height: height),
+            styleMask: [.titled, .closable],
+            backing: .buffered,
+            defer: false
+        )
+        panel.title = title
+        panel.isFloatingPanel = true
+        panel.level = .floating
+        panel.hidesOnDeactivate = false
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        panel.isReleasedWhenClosed = false
+
+        let content = NSView(frame: NSRect(x: 0, y: 0, width: width, height: height))
+        panel.contentView = content
+
+        var y: CGFloat = height - 16
+        if !hint.isEmpty {
+            let hintField = NSTextField(labelWithString: hint)
+            hintField.font = NSFont.systemFont(ofSize: 12)
+            hintField.textColor = .secondaryLabelColor
+            hintField.lineBreakMode = .byWordWrapping
+            hintField.maximumNumberOfLines = 2
+            let hintHeight: CGFloat = 32
+            y -= hintHeight
+            hintField.frame = NSRect(x: 16, y: y, width: width - 32, height: hintHeight)
+            content.addSubview(hintField)
+            y -= 8
+        }
+
+        let buttonHeight: CGFloat = 32
+        let scrollHeight = y - 16 - buttonHeight - 16
+        y -= scrollHeight
+
+        let scroll = NSScrollView(frame: NSRect(x: 16, y: y, width: width - 32, height: scrollHeight))
+        scroll.hasVerticalScroller = true
+        scroll.borderType = .bezelBorder
+        scroll.autohidesScrollers = true
+        scroll.drawsBackground = true
+
+        textView = NSTextView(frame: scroll.bounds)
+        textView.minSize = NSSize(width: 0, height: scroll.bounds.height)
+        textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+        textView.isVerticallyResizable = true
+        textView.isHorizontallyResizable = false
+        textView.autoresizingMask = [.width]
+        textView.textContainer?.containerSize = NSSize(width: scroll.bounds.width, height: CGFloat.greatestFiniteMagnitude)
+        textView.textContainer?.widthTracksTextView = true
+        textView.isRichText = false
+        textView.allowsUndo = true
+        textView.font = NSFont.systemFont(ofSize: 14)
+        textView.isAutomaticQuoteSubstitutionEnabled = false
+        textView.isAutomaticDashSubstitutionEnabled = false
+        scroll.documentView = textView
+        content.addSubview(scroll)
+
+        let sendButton = NSButton(title: sendTitle, target: nil, action: nil)
+        sendButton.bezelStyle = .rounded
+        sendButton.keyEquivalent = "\r"
+        sendButton.keyEquivalentModifierMask = .command
+        let cancelButton = NSButton(title: cancelTitle, target: nil, action: nil)
+        cancelButton.bezelStyle = .rounded
+        cancelButton.keyEquivalent = "\u{1b}"
+
+        let sendSize = sendButton.fittingSize
+        let cancelSize = cancelButton.fittingSize
+        let sendWidth = max(sendSize.width, 80)
+        let cancelWidth = max(cancelSize.width, 80)
+        sendButton.frame = NSRect(x: width - 16 - sendWidth, y: 16, width: sendWidth, height: buttonHeight)
+        cancelButton.frame = NSRect(
+            x: width - 16 - sendWidth - 12 - cancelWidth,
+            y: 16,
+            width: cancelWidth,
+            height: buttonHeight
+        )
+        content.addSubview(sendButton)
+        content.addSubview(cancelButton)
+
+        super.init()
+
+        sendButton.target = self
+        sendButton.action = #selector(send)
+        cancelButton.target = self
+        cancelButton.action = #selector(cancel)
+        panel.delegate = self
+
+        if let screen = NSScreen.main ?? NSScreen.screens.first {
+            let visible = screen.visibleFrame
+            panel.setFrameOrigin(NSPoint(
+                x: visible.midX - width / 2,
+                y: visible.midY - height / 2
+            ))
+        }
+
+        eventMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let self = self, event.window == self.panel else { return event }
+            let command = event.modifierFlags.contains(.command)
+            if command && (event.keyCode == 36 || event.keyCode == 76) {
+                self.send()
+                return nil
+            }
+            if event.keyCode == 53 {
+                self.cancel()
+                return nil
+            }
+            return event
+        }
+    }
+
+    static func present(
+        title: String,
+        sendTitle: String,
+        cancelTitle: String,
+        hint: String,
+        completion: @escaping (String?) -> Void
+    ) {
+        assert(Thread.isMainThread, "showKeystrokeInput must be called on the main thread")
+        if let existing = current {
+            existing.panel.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            completion(nil)
+            return
+        }
+
+        let controller = KeystrokeInputPanel(
+            title: title,
+            sendTitle: sendTitle,
+            cancelTitle: cancelTitle,
+            hint: hint,
+            completion: completion
+        )
+        current = controller
+        NSApp.activate(ignoringOtherApps: true)
+        controller.panel.makeKeyAndOrderFront(nil)
+        controller.panel.makeFirstResponder(controller.textView)
+    }
+
+    @objc private func send() {
+        finish(textView.string)
+    }
+
+    @objc private func cancel() {
+        finish(nil)
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        finish(nil)
+    }
+
+    private func finish(_ text: String?) {
+        guard !finished else { return }
+        finished = true
+        if let monitor = eventMonitor {
+            NSEvent.removeMonitor(monitor)
+            eventMonitor = nil
+        }
+        completion?(text)
+        completion = nil
+        panel.orderOut(nil)
+        if KeystrokeInputPanel.current === self {
+            KeystrokeInputPanel.current = nil
+        }
     }
 }
