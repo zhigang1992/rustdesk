@@ -213,6 +213,8 @@ class _RemotePageState extends State<RemotePage>
     // Register callback to cancel debounce timer when relative mouse mode is disabled
     _ffi.inputModel.onRelativeMouseModeDisabled =
         _cancelPointerLockCenterDebounceTimer;
+    _ffi.inputModel.onRequestSendTextAsKeystrokes =
+        () => handleSendTextAsKeystrokes(widget.id, _ffi);
 
     _waylandKeyboardModeWorker = ever(_ffi.ffiModel.pi.isSet, (bool isSet) {
       if (isSet) {
@@ -645,6 +647,7 @@ class _RemotePageState extends State<RemotePage>
     _waylandKeyboardModeWorker?.dispose();
     // Clear callback reference to prevent memory leaks and stale references
     _ffi.inputModel.onRelativeMouseModeDisabled = null;
+    _ffi.inputModel.onRequestSendTextAsKeystrokes = null;
     // Relative mouse mode cleanup is centralized in FFI.close(closeSession: ...).
     _ffi.textureModel.onRemotePageDispose(closeSession);
     if (closeSession && !isMacOS) {

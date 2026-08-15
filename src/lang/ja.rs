@@ -767,5 +767,7 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("whitelist_cidr_tip", "CIDR 表記に対応しています。例: 192.168.1.0/24"),
         ("Continue", ""),
         ("Browser didn't open? Use the url below to sign in.", ""),
+        ("Send text as keystrokes", "テキストをキー入力として送信"),
+        ("send-text-as-keystrokes-tip", "ここに入力または音声入力してください。{} で送信します。"),
     ].iter().cloned().collect();
 }

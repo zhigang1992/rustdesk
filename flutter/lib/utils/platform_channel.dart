@@ -42,4 +42,24 @@ class RdPlatformChannel {
     assert(isMacOS);
     return _hostMethodChannel.invokeMethod("terminate");
   }
+
+  /// Native macOS text box so dictation / IME stay on the host.
+  /// Returns the typed text, or null if cancelled / unavailable.
+  Future<String?> showKeystrokeInput({
+    required String title,
+    required String send,
+    required String cancel,
+    required String hint,
+  }) async {
+    if (!isMacOS) return null;
+    return _hostMethodChannel.invokeMethod<String>(
+      "showKeystrokeInput",
+      {
+        "title": title,
+        "send": send,
+        "cancel": cancel,
+        "hint": hint,
+      },
+    );
+  }
 }

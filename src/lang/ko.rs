@@ -767,5 +767,7 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("whitelist_cidr_tip", "CIDR 표기를 지원합니다. 예: 192.168.1.0/24"),
         ("Continue", ""),
         ("Browser didn't open? Use the url below to sign in.", ""),
+        ("Send text as keystrokes", "텍스트를 키 입력으로 보내기"),
+        ("send-text-as-keystrokes-tip", "여기에 입력하거나 받아쓰기를 사용하세요. {} 를 눌러 전송합니다."),
     ].iter().cloned().collect();
 }
