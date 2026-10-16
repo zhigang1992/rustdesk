@@ -456,7 +456,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
               ? FABLocation(FloatingActionButtonLocation.endFloat, 0, -35)
               : null,
           floatingActionButton: !showActionButton
-              ? null
+              ? _sendTextAsKeystrokesButton()
               : FloatingActionButton(
                   mini: !keyboardIsVisible,
                   child: Icon(
@@ -531,6 +531,27 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
               ],
             )),
           )),
+    );
+  }
+
+  Widget? _sendTextAsKeystrokesButton() {
+    final ffiModel = gFFI.ffiModel;
+    if (isWeb ||
+        !_showBar ||
+        ffiModel.pi.displays.isEmpty ||
+        ffiModel.viewOnly ||
+        !ffiModel.keyboard) {
+      return null;
+    }
+    return FloatingActionButton(
+      tooltip: translate('Send text as keystrokes'),
+      backgroundColor: MyTheme.accent,
+      child: const Icon(Icons.keyboard_voice, color: Colors.white),
+      onPressed: () {
+        setState(() => _showEdit = false);
+        _mobileFocusNode.unfocus();
+        handleSendTextAsKeystrokes(widget.id, gFFI);
+      },
     );
   }
 

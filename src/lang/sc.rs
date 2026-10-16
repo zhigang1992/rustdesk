@@ -783,5 +783,6 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("To start a voice call, enable \"Audio capture\" on the \"Share screen\" page.", "Pro aviare una mutida de boghe, ativa in sa pàgina \"Cumpartzi ischermu\" s’elementu \"Catura de s’àudio\"."),
         ("Send text as keystrokes", ""),
         ("send-text-as-keystrokes-tip", ""),
+        ("send-text-as-keystrokes-mobile-tip", ""),
     ].iter().cloned().collect();
 }

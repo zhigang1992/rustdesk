@@ -783,5 +783,6 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("To start a voice call, enable \"Audio capture\" on the \"Share screen\" page.", ""),
         ("Send text as keystrokes", "テキストをキー入力として送信"),
         ("send-text-as-keystrokes-tip", "ここに入力または音声入力してください。{} で送信します。"),
+        ("send-text-as-keystrokes-mobile-tip", "ここに入力または音声入力し、送信をタップしてください。"),
     ].iter().cloned().collect();
 }

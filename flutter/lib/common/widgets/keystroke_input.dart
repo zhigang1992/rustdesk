@@ -39,8 +39,10 @@ Future<String?> _promptKeystrokeText(OverlayDialogManager dialogManager) async {
   final title = translate('Send text as keystrokes');
   final send = translate('Send');
   final cancel = translate('Cancel');
-  final hint = translate('send-text-as-keystrokes-tip')
-      .replaceAll('{}', sendTextAsKeystrokesSubmitLabel());
+  final hint = isMobile
+      ? translate('send-text-as-keystrokes-mobile-tip')
+      : translate('send-text-as-keystrokes-tip')
+          .replaceAll('{}', sendTextAsKeystrokesSubmitLabel());
 
   if (isMacOS) {
     try {
