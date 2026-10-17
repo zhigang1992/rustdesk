@@ -57,6 +57,9 @@ class RawKeyFocusScope extends StatelessWidget {
 bool isSpecialHoldDragActive = false;
 // Cache the last focal point to calculate deltas in special hold-drag mode.
 Offset _lastSpecialHoldDragFocalPoint = Offset.zero;
+// Games that poll input per frame read a cursor jump and a button press in the
+// same frame as a drag from the old position, so touch mode presses after this.
+const _kPressAfterMoveDelay = Duration(milliseconds: 60);
 
 class RawTouchGestureDetectorRegion extends StatefulWidget {
   final Widget child;
@@ -94,6 +97,11 @@ class _RawTouchGestureDetectorRegionState
   double _scale = 1;
   bool _twoFingerRightDragActive = false;
   int _twoFingerRightDragGen = 0;
+  bool _twoFingerRightDragPressPending = false;
+  Offset _twoFingerRightDragLatestFocalPoint = Offset.zero;
+  int _touchModePressGen = 0;
+  bool _touchModePressPending = false;
+  Offset _touchModePendingPosition = Offset.zero;
 
   // Workaround tap down event when two fingers are used to scale(mobile)
   TapDownDetails? _lastTapDownDetails;
@@ -392,6 +400,17 @@ class _RawTouchGestureDetectorRegionState
         await ffi.cursorModel
             .move(_cacheLongPressPosition.dx, _cacheLongPressPosition.dy);
       }
+      if (isMobile &&
+          !ffiModel.isPeerMobile &&
+          !inputModel.relativeMouseMode.value) {
+        final recentLongPressDown =
+            DateTime.now().millisecondsSinceEpoch - _cacheLongPressPositionTs <
+                500;
+        await _touchModePressAfterMove(
+            recentLongPressDown ? _cacheLongPressPosition : d.localPosition,
+            d.localPosition);
+        return;
+      }
       // In relative mouse mode, skip mouse down - only send movement via sendMobileRelativeMouseMove
       if (!inputModel.relativeMouseMode.value) {
         await inputModel.sendMouse('down', MouseButtons.left);
@@ -410,6 +429,19 @@ class _RawTouchGestureDetectorRegionState
     }
   }
 
+  _touchModePressAfterMove(Offset start, Offset current) async {
+    final gen = ++_touchModePressGen;
+    _touchModePressPending = true;
+    _touchModePendingPosition = current;
+    await ffi.cursorModel.move(start.dx, start.dy);
+    await Future.delayed(_kPressAfterMoveDelay);
+    if (gen != _touchModePressGen || !_touchModePressPending) return;
+    _touchModePressPending = false;
+    await inputModel.sendMouse('down', MouseButtons.left);
+    await ffi.cursorModel
+        .move(_touchModePendingPosition.dx, _touchModePendingPosition.dy);
+  }
+
   onOneFingerPanUpdate(DragUpdateDetails d) async {
     if (isNotTouchBasedDevice()) {
       return;
@@ -418,6 +450,10 @@ class _RawTouchGestureDetectorRegionState
       return;
     }
     if (handleTouch && !_touchModePanStarted) {
+      return;
+    }
+    if (_touchModePressPending) {
+      _touchModePendingPosition = d.localPosition;
       return;
     }
     // In relative mouse mode, send delta directly without position tracking.
@@ -430,6 +466,7 @@ class _RawTouchGestureDetectorRegionState
 
   onOneFingerPanEnd(DragEndDetails d) async {
     _touchModePanStarted = false;
+    _touchModePressPending = false;
     if (isNotTouchBasedDevice()) {
       return;
     }
@@ -450,6 +487,7 @@ class _RawTouchGestureDetectorRegionState
   // double-click problem on iPad with magic mouse.
   onOneFingerPanCancel() {
     _touchModePanStarted = false;
+    _touchModePressPending = false;
   }
 
   // scale + pan event
@@ -472,18 +510,28 @@ class _RawTouchGestureDetectorRegionState
     // The first finger may already have started a left drag.
     _touchModePanStarted = false;
     await inputModel.sendMouse('up', MouseButtons.left);
-    if (handleTouch && !inputModel.relativeMouseMode.value) {
+    final absolute = handleTouch && !inputModel.relativeMouseMode.value;
+    if (absolute) {
+      _twoFingerRightDragPressPending = true;
+      _twoFingerRightDragLatestFocalPoint = localFocalPoint;
       await ffi.cursorModel.move(localFocalPoint.dx, localFocalPoint.dy);
+      await Future.delayed(_kPressAfterMoveDelay);
     }
     // The fingers may have lifted while awaiting; pressing now would leave
     // the right button held after its release was already sent.
     if (gen != _twoFingerRightDragGen || !_twoFingerRightDragActive) return;
+    _twoFingerRightDragPressPending = false;
     await inputModel.sendMouse('down', MouseButtons.right);
+    if (absolute) {
+      await ffi.cursorModel.move(_twoFingerRightDragLatestFocalPoint.dx,
+          _twoFingerRightDragLatestFocalPoint.dy);
+    }
   }
 
   _endTwoFingerRightDrag() async {
     if (!_twoFingerRightDragActive) return;
     _twoFingerRightDragActive = false;
+    _twoFingerRightDragPressPending = false;
     await inputModel.sendMouse('up', MouseButtons.right);
   }
 
@@ -511,6 +559,10 @@ class _RawTouchGestureDetectorRegionState
     if (_twoFingerRightDragActive) {
       if (d.pointerCount != 2) {
         await _endTwoFingerRightDrag();
+        return;
+      }
+      if (_twoFingerRightDragPressPending) {
+        _twoFingerRightDragLatestFocalPoint = d.localFocalPoint;
         return;
       }
       if (inputModel.relativeMouseMode.value) {
