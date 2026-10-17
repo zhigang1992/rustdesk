@@ -92,9 +92,10 @@ Future<_KeystrokePromptResult?> _promptKeystrokeText(
     }
   }
 
+  // Keep controller outside the builder so setState (checkbox) does not clear text.
+  final controller = TextEditingController();
+  var appendEnterValue = appendEnter;
   return dialogManager.show<_KeystrokePromptResult>((setState, close, context) {
-    final controller = TextEditingController();
-    var appendEnterValue = appendEnter;
     void submit() => close(_KeystrokePromptResult(
           text: controller.text,
           appendEnter: appendEnterValue,
