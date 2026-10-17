@@ -92,6 +92,7 @@ class _RawTouchGestureDetectorRegionState
   int _cacheLongPressPositionTs = 0;
   double _mouseScrollIntegral = 0; // mouse scroll speed controller
   double _scale = 1;
+  bool _twoFingerRightDragActive = false;
 
   // Workaround tap down event when two fingers are used to scale(mobile)
   TapDownDetails? _lastTapDownDetails;
@@ -116,6 +117,9 @@ class _RawTouchGestureDetectorRegionState
   bool get handleTouch => (isDesktop || isWebDesktop) || ffiModel.touchMode;
   SessionID get sessionId => ffi.sessionId;
   bool get canvasLocked => isMobile && ffi.canvasModel.locked;
+  // Mobile: two-finger drag is a right-button drag instead of zoom/pan.
+  bool get twoFingerRightDrag =>
+      isMobile && !widget.isCamera && !ffiModel.isPeerMobile;
 
   @override
   Widget build(BuildContext context) {
@@ -455,7 +459,26 @@ class _RawTouchGestureDetectorRegionState
     if (isSpecialHoldDragActive) {
       // Initialize the last focal point to calculate deltas manually.
       _lastSpecialHoldDragFocalPoint = d.focalPoint;
+    } else if (twoFingerRightDrag) {
+      _startTwoFingerRightDrag(d);
     }
+  }
+
+  _startTwoFingerRightDrag(ScaleStartDetails d) async {
+    _twoFingerRightDragActive = true;
+    // The first finger may already have started a left drag.
+    _touchModePanStarted = false;
+    await inputModel.sendMouse('up', MouseButtons.left);
+    if (handleTouch && !inputModel.relativeMouseMode.value) {
+      await ffi.cursorModel.move(d.localFocalPoint.dx, d.localFocalPoint.dy);
+    }
+    await inputModel.sendMouse('down', MouseButtons.right);
+  }
+
+  _endTwoFingerRightDrag() async {
+    if (!_twoFingerRightDragActive) return;
+    _twoFingerRightDragActive = false;
+    await inputModel.sendMouse('up', MouseButtons.right);
   }
 
   onTwoFingerScaleUpdate(ScaleUpdateDetails d) async {
@@ -469,6 +492,19 @@ class _RawTouchGestureDetectorRegionState
       final delta = d.focalPoint - _lastSpecialHoldDragFocalPoint;
       _lastSpecialHoldDragFocalPoint = d.focalPoint;
       await ffi.cursorModel.updatePan(delta * 2.0, d.focalPoint, handleTouch);
+      return;
+    }
+
+    if (_twoFingerRightDragActive) {
+      if (inputModel.relativeMouseMode.value) {
+        await inputModel.sendMobileRelativeMouseMove(
+            d.focalPointDelta.dx, d.focalPointDelta.dy);
+      } else if (handleTouch) {
+        await ffi.cursorModel.move(d.localFocalPoint.dx, d.localFocalPoint.dy);
+      } else {
+        await ffi.cursorModel
+            .updatePan(d.focalPointDelta, d.localFocalPoint, handleTouch);
+      }
       return;
     }
 
@@ -499,6 +535,10 @@ class _RawTouchGestureDetectorRegionState
     if (isNotTouchBasedDevice()) {
       return;
     }
+    if (_twoFingerRightDragActive) {
+      await _endTwoFingerRightDrag();
+      return;
+    }
     if ((isDesktop || isWebDesktop)) {
       if (widget.isCamera) return;
       await bind.sessionSendPointer(
@@ -520,6 +560,7 @@ class _RawTouchGestureDetectorRegionState
   get onThreeFingerVerticalDragUpdate => ffi.ffiModel.isPeerAndroid
       ? null
       : (d) {
+          _endTwoFingerRightDrag();
           _mouseScrollIntegral += d.delta.dy / 4;
           if (_mouseScrollIntegral > 1) {
             inputModel.scroll(1);
