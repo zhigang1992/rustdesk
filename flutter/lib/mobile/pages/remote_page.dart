@@ -457,29 +457,31 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
               : null,
           floatingActionButton: !showActionButton
               ? _sendTextAsKeystrokesButton()
-              : FloatingActionButton(
-                  mini: !keyboardIsVisible,
-                  child: Icon(
-                    (keyboardIsVisible || _showGestureHelp)
-                        ? Icons.expand_more
-                        : Icons.expand_less,
-                    color: Colors.white,
-                  ),
-                  backgroundColor: MyTheme.accent,
-                  onPressed: () {
-                    setState(() {
-                      if (keyboardIsVisible) {
-                        _showEdit = false;
-                        gFFI.invokeMethod("enable_soft_keyboard", false);
-                        _mobileFocusNode.unfocus();
-                        _physicalFocusNode.requestFocus();
-                      } else if (_showGestureHelp) {
-                        _showGestureHelp = false;
-                      } else {
-                        _showBar = !_showBar;
-                      }
-                    });
-                  }),
+              : _withSendTextAsKeystrokesButton(
+                  !keyboardIsVisible && !_showGestureHelp,
+                  FloatingActionButton(
+                      mini: !keyboardIsVisible,
+                      child: Icon(
+                        (keyboardIsVisible || _showGestureHelp)
+                            ? Icons.expand_more
+                            : Icons.expand_less,
+                        color: Colors.white,
+                      ),
+                      backgroundColor: MyTheme.accent,
+                      onPressed: () {
+                        setState(() {
+                          if (keyboardIsVisible) {
+                            _showEdit = false;
+                            gFFI.invokeMethod("enable_soft_keyboard", false);
+                            _mobileFocusNode.unfocus();
+                            _physicalFocusNode.requestFocus();
+                          } else if (_showGestureHelp) {
+                            _showGestureHelp = false;
+                          } else {
+                            _showBar = !_showBar;
+                          }
+                        });
+                      })),
           bottomNavigationBar: Obx(() => Stack(
                 alignment: Alignment.bottomCenter,
                 children: [
@@ -537,13 +539,13 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
   Widget? _sendTextAsKeystrokesButton() {
     final ffiModel = gFFI.ffiModel;
     if (isWeb ||
-        !_showBar ||
         ffiModel.pi.displays.isEmpty ||
         ffiModel.viewOnly ||
         !ffiModel.keyboard) {
       return null;
     }
     return FloatingActionButton(
+      heroTag: null,
       tooltip: translate('Send text as keystrokes'),
       backgroundColor: MyTheme.accent,
       child: const Icon(Icons.keyboard_voice, color: Colors.white),
@@ -552,6 +554,16 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
         _mobileFocusNode.unfocus();
         handleSendTextAsKeystrokes(widget.id, gFFI);
       },
+    );
+  }
+
+  Widget _withSendTextAsKeystrokesButton(bool show, Widget fab) {
+    final button = show ? _sendTextAsKeystrokesButton() : null;
+    if (button == null) return fab;
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.end,
+      children: [button, const SizedBox(height: 12), fab],
     );
   }
 
