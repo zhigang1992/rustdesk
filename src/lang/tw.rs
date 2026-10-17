@@ -782,7 +782,8 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("relay-fallback-delay-tip", "已經建立的中繼連線會等待直連的 WebRTC 多久，超過這個時間就改用中繼。調大可以讓較慢的直連有更多機會勝出；調小則在無法直連的網路上更快回退到中繼。留空表示使用預設值 2.5 秒。"),
         ("To start a voice call, enable \"Audio capture\" on the \"Share screen\" page.", "若要開始語音通話，請在「螢幕分享」頁面啟用「音訊錄製」。"),
         ("Send text as keystrokes", "傳送文字按鍵"),
-        ("send-text-as-keystrokes-tip", "在此輸入或使用聽寫。按 {} 傳送。"),
-        ("send-text-as-keystrokes-mobile-tip", "在此輸入或使用聽寫，然後點選傳送。"),
+        ("send-text-as-keystrokes-tip", "在此輸入或使用聽寫。按 Enter 傳送。"),
+        ("send-text-as-keystrokes-mobile-tip", "在此輸入或使用聽寫。按 Enter 或點選傳送。"),
+        ("Also send Enter key", "同時傳送 Enter 鍵"),
     ].iter().cloned().collect();
 }

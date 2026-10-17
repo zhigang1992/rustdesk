@@ -782,7 +782,8 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("relay-fallback-delay-tip", "Cuánto tiempo espera una conexión de relé ya establecida a la conexión directa WebRTC antes de usarse en su lugar. Auméntelo para dar más tiempo a una conexión directa lenta; redúzcalo para recurrir antes al relé en redes donde no es posible una conexión directa. Déjelo vacío para el valor predeterminado de 2.5 segundos."),
         ("To start a voice call, enable \"Audio capture\" on the \"Share screen\" page.", "Para comenzar una llamada de voz activar \"Captura de audio\" en la página \"Compartir pantalla\"."),
         ("Send text as keystrokes", "Enviar texto como pulsaciones"),
-        ("send-text-as-keystrokes-tip", "Escribe o dicta aquí. Pulsa {} para enviar."),
-        ("send-text-as-keystrokes-mobile-tip", "Escribe o dicta aquí y pulsa Enviar."),
+        ("send-text-as-keystrokes-tip", "Escribe o dicta aquí. Pulsa Enter para enviar."),
+        ("send-text-as-keystrokes-mobile-tip", "Escribe o dicta aquí. Pulsa Enter o toca Enviar."),
+        ("Also send Enter key", "También enviar la tecla Enter"),
     ].iter().cloned().collect();
 }

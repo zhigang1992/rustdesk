@@ -313,19 +313,25 @@ class MainFlutterWindow: NSWindow {
                     var send = "Send"
                     var cancel = "Cancel"
                     var hint = ""
+                    var appendEnterLabel = "Also send Enter key"
+                    var appendEnter = false
                     if let arg = call.arguments as? [String: Any] {
                         title = (arg["title"] as? String) ?? title
                         send = (arg["send"] as? String) ?? send
                         cancel = (arg["cancel"] as? String) ?? cancel
                         hint = (arg["hint"] as? String) ?? hint
+                        appendEnterLabel = (arg["appendEnterLabel"] as? String) ?? appendEnterLabel
+                        appendEnter = (arg["appendEnter"] as? Bool) ?? appendEnter
                     }
                     KeystrokeInputPanel.present(
                         title: title,
                         sendTitle: send,
                         cancelTitle: cancel,
                         hint: hint,
-                        completion: { text in
-                            result(text)
+                        appendEnterLabel: appendEnterLabel,
+                        appendEnter: appendEnter,
+                        completion: { payload in
+                            result(payload)
                         }
                     )
 
@@ -336,13 +342,14 @@ class MainFlutterWindow: NSWindow {
     }
 }
 
-/// Host-side text box so dictation / IME run on macOS, not the remote session.
-private class KeystrokeInputPanel: NSObject, NSWindowDelegate {
+/// Host-side single-line field so dictation / IME run on macOS, not the remote.
+private class KeystrokeInputPanel: NSObject, NSWindowDelegate, NSTextFieldDelegate {
     static var current: KeystrokeInputPanel?
 
     private let panel: NSPanel
-    private let textView: NSTextView
-    private var completion: ((String?) -> Void)?
+    private let textField: NSTextField
+    private let appendEnterCheckbox: NSButton
+    private var completion: (([String: Any]?) -> Void)?
     private var eventMonitor: Any?
     private var finished = false
 
@@ -351,12 +358,26 @@ private class KeystrokeInputPanel: NSObject, NSWindowDelegate {
         sendTitle: String,
         cancelTitle: String,
         hint: String,
-        completion: @escaping (String?) -> Void
+        appendEnterLabel: String,
+        appendEnter: Bool,
+        completion: @escaping ([String: Any]?) -> Void
     ) {
         self.completion = completion
 
         let width: CGFloat = 480
-        let height: CGFloat = 220
+        let buttonHeight: CGFloat = 32
+        let fieldHeight: CGFloat = 24
+        let checkboxHeight: CGFloat = 18
+        let hintHeight: CGFloat = hint.isEmpty ? 0 : 32
+        let topPad: CGFloat = 16
+        let gap: CGFloat = 8
+        let bottomPad: CGFloat = 16
+        // hint + field + checkbox + buttons, with gaps
+        let height = topPad
+            + hintHeight + (hint.isEmpty ? 0 : gap)
+            + fieldHeight + gap
+            + checkboxHeight + gap
+            + buttonHeight + bottomPad
         panel = NSPanel(
             contentRect: NSRect(x: 0, y: 0, width: width, height: height),
             styleMask: [.titled, .closable],
@@ -373,50 +394,42 @@ private class KeystrokeInputPanel: NSObject, NSWindowDelegate {
         let content = NSView(frame: NSRect(x: 0, y: 0, width: width, height: height))
         panel.contentView = content
 
-        var y: CGFloat = height - 16
+        var y: CGFloat = height - topPad
         if !hint.isEmpty {
+            y -= hintHeight
             let hintField = NSTextField(labelWithString: hint)
             hintField.font = NSFont.systemFont(ofSize: 12)
             hintField.textColor = .secondaryLabelColor
             hintField.lineBreakMode = .byWordWrapping
             hintField.maximumNumberOfLines = 2
-            let hintHeight: CGFloat = 32
-            y -= hintHeight
             hintField.frame = NSRect(x: 16, y: y, width: width - 32, height: hintHeight)
             content.addSubview(hintField)
-            y -= 8
+            y -= gap
         }
 
-        let buttonHeight: CGFloat = 32
-        let scrollHeight = y - 16 - buttonHeight - 16
-        y -= scrollHeight
+        y -= fieldHeight
+        textField = NSTextField(frame: NSRect(x: 16, y: y, width: width - 32, height: fieldHeight))
+        textField.font = NSFont.systemFont(ofSize: 14)
+        textField.isEditable = true
+        textField.isSelectable = true
+        textField.isBordered = true
+        textField.bezelStyle = .squareBezel
+        content.addSubview(textField)
+        y -= gap
 
-        let scroll = NSScrollView(frame: NSRect(x: 16, y: y, width: width - 32, height: scrollHeight))
-        scroll.hasVerticalScroller = true
-        scroll.borderType = .bezelBorder
-        scroll.autohidesScrollers = true
-        scroll.drawsBackground = true
-
-        textView = NSTextView(frame: scroll.bounds)
-        textView.minSize = NSSize(width: 0, height: scroll.bounds.height)
-        textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
-        textView.isVerticallyResizable = true
-        textView.isHorizontallyResizable = false
-        textView.autoresizingMask = [.width]
-        textView.textContainer?.containerSize = NSSize(width: scroll.bounds.width, height: CGFloat.greatestFiniteMagnitude)
-        textView.textContainer?.widthTracksTextView = true
-        textView.isRichText = false
-        textView.allowsUndo = true
-        textView.font = NSFont.systemFont(ofSize: 14)
-        textView.isAutomaticQuoteSubstitutionEnabled = false
-        textView.isAutomaticDashSubstitutionEnabled = false
-        scroll.documentView = textView
-        content.addSubview(scroll)
+        y -= checkboxHeight
+        appendEnterCheckbox = NSButton(
+            checkboxWithTitle: appendEnterLabel,
+            target: nil,
+            action: nil
+        )
+        appendEnterCheckbox.frame = NSRect(x: 16, y: y, width: width - 32, height: checkboxHeight)
+        appendEnterCheckbox.state = appendEnter ? .on : .off
+        content.addSubview(appendEnterCheckbox)
 
         let sendButton = NSButton(title: sendTitle, target: nil, action: nil)
         sendButton.bezelStyle = .rounded
         sendButton.keyEquivalent = "\r"
-        sendButton.keyEquivalentModifierMask = .command
         let cancelButton = NSButton(title: cancelTitle, target: nil, action: nil)
         cancelButton.bezelStyle = .rounded
         cancelButton.keyEquivalent = "\u{1b}"
@@ -425,10 +438,10 @@ private class KeystrokeInputPanel: NSObject, NSWindowDelegate {
         let cancelSize = cancelButton.fittingSize
         let sendWidth = max(sendSize.width, 80)
         let cancelWidth = max(cancelSize.width, 80)
-        sendButton.frame = NSRect(x: width - 16 - sendWidth, y: 16, width: sendWidth, height: buttonHeight)
+        sendButton.frame = NSRect(x: width - 16 - sendWidth, y: bottomPad, width: sendWidth, height: buttonHeight)
         cancelButton.frame = NSRect(
             x: width - 16 - sendWidth - 12 - cancelWidth,
-            y: 16,
+            y: bottomPad,
             width: cancelWidth,
             height: buttonHeight
         )
@@ -437,6 +450,7 @@ private class KeystrokeInputPanel: NSObject, NSWindowDelegate {
 
         super.init()
 
+        textField.delegate = self
         sendButton.target = self
         sendButton.action = #selector(send)
         cancelButton.target = self
@@ -453,11 +467,6 @@ private class KeystrokeInputPanel: NSObject, NSWindowDelegate {
 
         eventMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self = self, event.window == self.panel else { return event }
-            let command = event.modifierFlags.contains(.command)
-            if command && (event.keyCode == 36 || event.keyCode == 76) {
-                self.send()
-                return nil
-            }
             if event.keyCode == 53 {
                 self.cancel()
                 return nil
@@ -471,7 +480,9 @@ private class KeystrokeInputPanel: NSObject, NSWindowDelegate {
         sendTitle: String,
         cancelTitle: String,
         hint: String,
-        completion: @escaping (String?) -> Void
+        appendEnterLabel: String,
+        appendEnter: Bool,
+        completion: @escaping ([String: Any]?) -> Void
     ) {
         assert(Thread.isMainThread, "showKeystrokeInput must be called on the main thread")
         if let existing = current {
@@ -486,16 +497,29 @@ private class KeystrokeInputPanel: NSObject, NSWindowDelegate {
             sendTitle: sendTitle,
             cancelTitle: cancelTitle,
             hint: hint,
+            appendEnterLabel: appendEnterLabel,
+            appendEnter: appendEnter,
             completion: completion
         )
         current = controller
         NSApp.activate(ignoringOtherApps: true)
         controller.panel.makeKeyAndOrderFront(nil)
-        controller.panel.makeFirstResponder(controller.textView)
+        controller.panel.makeFirstResponder(controller.textField)
+    }
+
+    func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+        if commandSelector == #selector(NSResponder.insertNewline(_:)) {
+            send()
+            return true
+        }
+        return false
     }
 
     @objc private func send() {
-        finish(textView.string)
+        finish([
+            "text": textField.stringValue,
+            "appendEnter": appendEnterCheckbox.state == .on,
+        ])
     }
 
     @objc private func cancel() {
@@ -506,14 +530,14 @@ private class KeystrokeInputPanel: NSObject, NSWindowDelegate {
         finish(nil)
     }
 
-    private func finish(_ text: String?) {
+    private func finish(_ payload: [String: Any]?) {
         guard !finished else { return }
         finished = true
         if let monitor = eventMonitor {
             NSEvent.removeMonitor(monitor)
             eventMonitor = nil
         }
-        completion?(text)
+        completion?(payload)
         completion = nil
         panel.orderOut(nil)
         if KeystrokeInputPanel.current === self {

@@ -149,8 +149,8 @@ handleOsPasswordEditIcon(
 
 Future<void> handleSendTextAsKeystrokes(String id, FFI ffi) async {
   Future<void> send() => promptAndSendKeystrokes(
-        sessionId: ffi.sessionId,
-        dialogManager: ffi.dialogManager,
+        peerId: id,
+        ffi: ffi,
       );
 
   final isWaylandPeer = ffi.ffiModel.pi.platform == kPeerPlatformLinux &&

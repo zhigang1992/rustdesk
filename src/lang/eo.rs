@@ -784,5 +784,6 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("Send text as keystrokes", ""),
         ("send-text-as-keystrokes-tip", ""),
         ("send-text-as-keystrokes-mobile-tip", ""),
+        ("Also send Enter key", ""),
     ].iter().cloned().collect();
 }
