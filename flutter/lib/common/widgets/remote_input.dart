@@ -93,6 +93,7 @@ class _RawTouchGestureDetectorRegionState
   double _mouseScrollIntegral = 0; // mouse scroll speed controller
   double _scale = 1;
   bool _twoFingerRightDragActive = false;
+  int _twoFingerRightDragGen = 0;
 
   // Workaround tap down event when two fingers are used to scale(mobile)
   TapDownDetails? _lastTapDownDetails;
@@ -363,6 +364,7 @@ class _RawTouchGestureDetectorRegionState
     if (isNotTouchBasedDevice()) {
       return;
     }
+    await _endTwoFingerRightDrag();
     if (handleTouch) {
       if (lastTapDownDetails != null) {
         await ffi.cursorModel.move(lastTapDownDetails.localPosition.dx,
@@ -460,18 +462,22 @@ class _RawTouchGestureDetectorRegionState
       // Initialize the last focal point to calculate deltas manually.
       _lastSpecialHoldDragFocalPoint = d.focalPoint;
     } else if (twoFingerRightDrag) {
-      _startTwoFingerRightDrag(d);
+      _startTwoFingerRightDrag(d.localFocalPoint);
     }
   }
 
-  _startTwoFingerRightDrag(ScaleStartDetails d) async {
+  _startTwoFingerRightDrag(Offset localFocalPoint) async {
     _twoFingerRightDragActive = true;
+    final gen = ++_twoFingerRightDragGen;
     // The first finger may already have started a left drag.
     _touchModePanStarted = false;
     await inputModel.sendMouse('up', MouseButtons.left);
     if (handleTouch && !inputModel.relativeMouseMode.value) {
-      await ffi.cursorModel.move(d.localFocalPoint.dx, d.localFocalPoint.dy);
+      await ffi.cursorModel.move(localFocalPoint.dx, localFocalPoint.dy);
     }
+    // The fingers may have lifted while awaiting; pressing now would leave
+    // the right button held after its release was already sent.
+    if (gen != _twoFingerRightDragGen || !_twoFingerRightDragActive) return;
     await inputModel.sendMouse('down', MouseButtons.right);
   }
 
@@ -495,7 +501,18 @@ class _RawTouchGestureDetectorRegionState
       return;
     }
 
+    if (twoFingerRightDrag && !_twoFingerRightDragActive) {
+      // The recognizer stays in the two-finger state briefly after a finger
+      // lifts, so a finger put back down arrives here without a new start.
+      if (d.pointerCount == 2) _startTwoFingerRightDrag(d.localFocalPoint);
+      return;
+    }
+
     if (_twoFingerRightDragActive) {
+      if (d.pointerCount != 2) {
+        await _endTwoFingerRightDrag();
+        return;
+      }
       if (inputModel.relativeMouseMode.value) {
         await inputModel.sendMobileRelativeMouseMove(
             d.focalPointDelta.dx, d.focalPointDelta.dy);
