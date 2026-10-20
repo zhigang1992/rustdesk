@@ -10,6 +10,8 @@ import 'package:flutter_hbb/common.dart';
 import 'package:flutter_hbb/consts.dart';
 import 'package:flutter_hbb/models/model.dart';
 import 'package:flutter_hbb/models/input_model.dart';
+import 'package:flutter_hbb/models/control_pad_model.dart';
+import 'package:flutter_hbb/models/control_pad_store.dart';
 
 import './gestures.dart';
 
@@ -65,6 +67,8 @@ const _kPressAfterMoveDelay = Duration(milliseconds: 60);
 const _kTouchModeDragThreshold = 20.0;
 // Held without exceeding the drag threshold: commit to left-button drag.
 const _kTouchModeDragHoldDelay = Duration(milliseconds: 120);
+
+bool isTwoFingerRightDragMode() => getTwoFingerMode() == TwoFingerMode.rightDrag;
 
 class RawTouchGestureDetectorRegion extends StatefulWidget {
   final Widget child;
@@ -140,7 +144,10 @@ class _RawTouchGestureDetectorRegionState
   bool get canvasLocked => isMobile && ffi.canvasModel.locked;
   // Mobile: two-finger drag is a right-button drag instead of zoom/pan.
   bool get twoFingerRightDrag =>
-      isMobile && !widget.isCamera && !ffiModel.isPeerMobile;
+      isMobile &&
+      !widget.isCamera &&
+      !ffiModel.isPeerMobile &&
+      isTwoFingerRightDragMode();
 
   @override
   Widget build(BuildContext context) {

@@ -229,6 +229,8 @@ const String kOptionKeepAwakeDuringIncomingSessions = "keep-awake-during-incomin
 const String kOptionKeepAwakeDuringOutgoingSessions = "keep-awake-during-outgoing-sessions";
 
 const String kOptionShowMobileAction = "showMobileActions";
+const String kOptionControlPad = "controlPad";
+const String kOptionTwoFingerMode = "twoFingerMode";
 
 const String kUrlActionClose = "close";
 

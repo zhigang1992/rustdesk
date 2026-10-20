@@ -3,12 +3,15 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_hbb/common/shared_state.dart';
+import 'package:flutter_hbb/common/widgets/control_pad.dart';
 import 'package:flutter_hbb/common/widgets/toolbar.dart';
 import 'package:flutter_hbb/consts.dart';
 import 'package:flutter_hbb/mobile/widgets/floating_mouse.dart';
 import 'package:flutter_hbb/mobile/widgets/floating_mouse_widgets.dart';
 import 'package:flutter_hbb/mobile/widgets/gesture_help.dart';
 import 'package:flutter_hbb/models/chat_model.dart';
+import 'package:flutter_hbb/models/control_pad_model.dart';
+import 'package:flutter_hbb/models/control_pad_store.dart';
 import 'package:flutter_keyboard_visibility/flutter_keyboard_visibility.dart';
 import 'package:flutter_svg/svg.dart';
 import 'package:get/get.dart';
@@ -498,42 +501,140 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                       : Offstage(),
                 ],
               )),
+          // Pad sits outside RawPointerMouseRegion so physical-mouse hits on
+          // chips are not also forwarded as remote desktop clicks.
           body: Obx(
-            () => getRawPointerAndKeyBody(Overlay(
-              initialEntries: [
-                OverlayEntry(builder: (context) {
-                  return Container(
-                    color: kColorCanvas,
-                    child: isWebDesktop
-                        ? getBodyForDesktopWithListener()
-                        : SafeArea(
-                            child:
-                                OrientationBuilder(builder: (ctx, orientation) {
-                              if (_currentOrientation != orientation) {
-                                Timer(const Duration(milliseconds: 200), () {
-                                  gFFI.dialogManager
-                                      .resetMobileActionsOverlay(ffi: gFFI);
-                                  _currentOrientation = orientation;
-                                  gFFI.canvasModel.updateViewStyle();
-                                });
-                              }
-                              return Container(
-                                color: MyTheme.canvasColor,
-                                child: inputModel.isPhysicalMouse.value
-                                    ? getBodyForMobile()
-                                    : RawTouchGestureDetectorRegion(
-                                        child: getBodyForMobile(),
-                                        ffi: gFFI,
-                                      ),
-                              );
-                            }),
-                          ),
-                  );
-                })
+            () => Stack(
+              fit: StackFit.expand,
+              children: [
+                getRawPointerAndKeyBody(Overlay(
+                  initialEntries: [
+                    OverlayEntry(builder: (context) {
+                      return Container(
+                        color: kColorCanvas,
+                        child: isWebDesktop
+                            ? getBodyForDesktopWithListener()
+                            : SafeArea(
+                                child: OrientationBuilder(
+                                    builder: (ctx, orientation) {
+                                  if (_currentOrientation != orientation) {
+                                    Timer(const Duration(milliseconds: 200),
+                                        () {
+                                      gFFI.dialogManager
+                                          .resetMobileActionsOverlay(ffi: gFFI);
+                                      _currentOrientation = orientation;
+                                      gFFI.canvasModel.updateViewStyle();
+                                    });
+                                  }
+                                  return Container(
+                                    color: MyTheme.canvasColor,
+                                    child: inputModel.isPhysicalMouse.value
+                                        ? getBodyForMobile()
+                                        : RawTouchGestureDetectorRegion(
+                                            child: getBodyForMobile(),
+                                            ffi: gFFI,
+                                          ),
+                                  );
+                                }),
+                              ),
+                      );
+                    }),
+                  ],
+                )),
+                ControlPadOverlay(ffi: gFFI, onPress: _onControlPadPress),
               ],
-            )),
+            ),
           )),
     );
+  }
+
+  void _onControlPadPress(PadButton b, bool down) {
+    if (!down) return;
+    switch (b.actionKind) {
+      case PadActionKind.appAction:
+        switch (b.appAction) {
+          case PadAppAction.menu:
+            setState(() => _showBar = !_showBar);
+            break;
+          case PadAppAction.sendText:
+            final ffiModel = gFFI.ffiModel;
+            if (isWeb ||
+                ffiModel.pi.displays.isEmpty ||
+                ffiModel.viewOnly ||
+                !ffiModel.keyboard) {
+              return;
+            }
+            handleSendTextAsKeystrokes(widget.id, gFFI);
+            break;
+          case PadAppAction.toggleTwoFinger:
+            setTwoFingerMode(isTwoFingerRightDragMode()
+                ? TwoFingerMode.canvas
+                : TwoFingerMode.rightDrag);
+            break;
+          case PadAppAction.keyboard:
+            openKeyboard();
+            break;
+          case null:
+            break;
+        }
+        break;
+      case PadActionKind.key:
+        final name = _padKeyName(b.payload);
+        if (name != null) inputModel.inputKey(name);
+        break;
+      case PadActionKind.combo:
+        final parts = b.comboParts
+            .map((p) => p.trim().toLowerCase())
+            .where((p) => p.isNotEmpty)
+            .toList();
+        if (parts.isEmpty) return;
+        final key = _padKeyName(parts.last);
+        if (key == null) return;
+        final mods = parts.sublist(0, parts.length - 1).toSet();
+        bind.sessionInputKey(
+          sessionId: sessionId,
+          name: key,
+          down: false,
+          press: true,
+          alt: mods.contains('alt') || mods.contains('option'),
+          ctrl: mods.contains('ctrl') || mods.contains('control'),
+          shift: mods.contains('shift'),
+          command: mods.contains('cmd') ||
+              mods.contains('command') ||
+              mods.contains('meta') ||
+              mods.contains('win'),
+        );
+        break;
+    }
+  }
+
+  String? _padKeyName(String raw) {
+    final s = raw.trim();
+    if (s.isEmpty) return null;
+    if (s.toUpperCase().startsWith('VK_')) return s.toUpperCase();
+    switch (s.toLowerCase()) {
+      case 'esc':
+      case 'escape':
+        return 'VK_ESCAPE';
+      case 'tab':
+        return 'VK_TAB';
+      case 'enter':
+      case 'return':
+        return 'VK_RETURN';
+      case 'space':
+        return 'VK_SPACE';
+      case 'del':
+      case 'delete':
+        return 'VK_DELETE';
+      case 'backspace':
+        return 'VK_BACK';
+      default:
+        if (RegExp(r'^f([1-9]|1[0-2])$', caseSensitive: false).hasMatch(s)) {
+          return 'VK_${s.toUpperCase()}';
+        }
+        if (s.length == 1) return 'VK_${s.toUpperCase()}';
+        return null;
+    }
   }
 
   Widget? _sendTextAsKeystrokesButton() {
