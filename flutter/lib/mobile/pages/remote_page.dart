@@ -63,7 +63,8 @@ class RemotePage extends StatefulWidget {
 
 class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
   Timer? _timer;
-  bool _showBar = !isWebDesktop;
+  // Control Pad owns session actions; keep the legacy bottom bar off until Menu.
+  bool _showBar = false;
   bool _showGestureHelp = false;
   String _value = '';
   Orientation? _currentOrientation;
@@ -104,7 +105,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
       forceRelay: widget.forceRelay,
     );
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      SystemChrome.setEnabledSystemUIMode(SystemUiMode.manual, overlays: []);
+      _hideRemoteSystemUi();
       gFFI.dialogManager
           .showLoading(translate('Connecting...'), onCancel: closeConnection);
     });
@@ -185,7 +186,14 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       trySyncClipboard();
+      _hideRemoteSystemUi();
     }
+  }
+
+  /// iOS only honors this when status-bar appearance is view-controller based.
+  void _hideRemoteSystemUi() {
+    if (keyboardVisibilityController.isVisible && _showEdit) return;
+    SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
   }
 
   // For client side
@@ -243,7 +251,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
 
   void onSoftKeyboardChanged(bool visible) {
     if (!visible) {
-      SystemChrome.setEnabledSystemUIMode(SystemUiMode.manual, overlays: []);
+      _hideRemoteSystemUi();
       // [pi.version.isNotEmpty] -> check ready or not, avoid login without soft-keyboard
       if (gFFI.chatModel.chatWindowOverlayEntry == null &&
           gFFI.ffiModel.pi.version.isNotEmpty) {
@@ -446,7 +454,9 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
   Widget build(BuildContext context) {
     final keyboardIsVisible =
         keyboardVisibilityController.isVisible && _showEdit;
-    final showActionButton = !_showBar || keyboardIsVisible || _showGestureHelp;
+    // Only surface a Scaffold FAB to dismiss keyboard / gesture help.
+    // Session controls live on the Control Pad (voice-FAB style chips).
+    final showDismissFab = keyboardIsVisible || _showGestureHelp;
 
     return WillPopScope(
       onWillPop: () async {
@@ -458,33 +468,24 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
           floatingActionButtonLocation: keyboardIsVisible
               ? FABLocation(FloatingActionButtonLocation.endFloat, 0, -35)
               : null,
-          floatingActionButton: !showActionButton
-              ? _sendTextAsKeystrokesButton()
-              : _withSendTextAsKeystrokesButton(
-                  !keyboardIsVisible && !_showGestureHelp,
-                  FloatingActionButton(
-                      mini: !keyboardIsVisible,
-                      child: Icon(
-                        (keyboardIsVisible || _showGestureHelp)
-                            ? Icons.expand_more
-                            : Icons.expand_less,
-                        color: Colors.white,
-                      ),
-                      backgroundColor: MyTheme.accent,
-                      onPressed: () {
-                        setState(() {
-                          if (keyboardIsVisible) {
-                            _showEdit = false;
-                            gFFI.invokeMethod("enable_soft_keyboard", false);
-                            _mobileFocusNode.unfocus();
-                            _physicalFocusNode.requestFocus();
-                          } else if (_showGestureHelp) {
-                            _showGestureHelp = false;
-                          } else {
-                            _showBar = !_showBar;
-                          }
-                        });
-                      })),
+          floatingActionButton: !showDismissFab
+              ? null
+              : FloatingActionButton(
+                  mini: !keyboardIsVisible,
+                  child: const Icon(Icons.expand_more, color: Colors.white),
+                  backgroundColor: MyTheme.accent,
+                  onPressed: () {
+                    setState(() {
+                      if (keyboardIsVisible) {
+                        _showEdit = false;
+                        gFFI.invokeMethod("enable_soft_keyboard", false);
+                        _mobileFocusNode.unfocus();
+                        _physicalFocusNode.requestFocus();
+                      } else if (_showGestureHelp) {
+                        _showGestureHelp = false;
+                      }
+                    });
+                  }),
           bottomNavigationBar: Obx(() => Stack(
                 alignment: Alignment.bottomCenter,
                 children: [
@@ -515,6 +516,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                         child: isWebDesktop
                             ? getBodyForDesktopWithListener()
                             : SafeArea(
+                                top: false,
                                 child: OrientationBuilder(
                                     builder: (ctx, orientation) {
                                   if (_currentOrientation != orientation) {
@@ -541,7 +543,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                     }),
                   ],
                 )),
-                ControlPadOverlay(ffi: gFFI, onPress: _onControlPadPress),
+                ControlPadOverlay(onPress: _onControlPadPress),
               ],
             ),
           )),
@@ -554,7 +556,6 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
       case PadActionKind.appAction:
         switch (b.appAction) {
           case PadAppAction.menu:
-            setState(() => _showBar = !_showBar);
             break;
           case PadAppAction.sendText:
             final ffiModel = gFFI.ffiModel;
@@ -573,6 +574,23 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
             break;
           case PadAppAction.keyboard:
             openKeyboard();
+            break;
+          case PadAppAction.gestureHelp:
+            setState(() => _showGestureHelp = true);
+            break;
+          case PadAppAction.chat:
+            onPressedTextChat(widget.id);
+            break;
+          case PadAppAction.displays:
+            setState(() => _showEdit = false);
+            showOptions(context, widget.id, gFFI.dialogManager);
+            break;
+          case PadAppAction.disconnect:
+            clientClose(sessionId, gFFI);
+            break;
+          case PadAppAction.more:
+            setState(() => _showEdit = false);
+            showActions(widget.id);
             break;
           case null:
             break;
@@ -635,37 +653,6 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
         if (s.length == 1) return 'VK_${s.toUpperCase()}';
         return null;
     }
-  }
-
-  Widget? _sendTextAsKeystrokesButton() {
-    final ffiModel = gFFI.ffiModel;
-    if (isWeb ||
-        ffiModel.pi.displays.isEmpty ||
-        ffiModel.viewOnly ||
-        !ffiModel.keyboard) {
-      return null;
-    }
-    return FloatingActionButton(
-      heroTag: null,
-      tooltip: translate('Send text as keystrokes'),
-      backgroundColor: MyTheme.accent,
-      child: const Icon(Icons.keyboard_voice, color: Colors.white),
-      onPressed: () {
-        setState(() => _showEdit = false);
-        _mobileFocusNode.unfocus();
-        handleSendTextAsKeystrokes(widget.id, gFFI);
-      },
-    );
-  }
-
-  Widget _withSendTextAsKeystrokesButton(bool show, Widget fab) {
-    final button = show ? _sendTextAsKeystrokesButton() : null;
-    if (button == null) return fab;
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      crossAxisAlignment: CrossAxisAlignment.end,
-      children: [button, const SizedBox(height: 12), fab],
-    );
   }
 
   Widget getRawPointerAndKeyBody(Widget child) {

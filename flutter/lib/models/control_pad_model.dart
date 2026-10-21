@@ -2,13 +2,24 @@ import 'dart:convert';
 
 enum PadActionKind { appAction, key, combo }
 
-enum PadAppAction { menu, sendText, toggleTwoFinger, keyboard }
+enum PadAppAction {
+  menu,
+  sendText,
+  keyboard,
+  toggleTwoFinger,
+  gestureHelp,
+  chat,
+  displays,
+  disconnect,
+  more,
+}
 
+/// Legacy edge enum kept only so v1 configs can migrate to free x/y.
 enum PadEdge { left, right, top, bottom }
 
 enum TwoFingerMode { canvas, rightDrag }
 
-const int kControlPadVersion = 1;
+const int kControlPadVersion = 3;
 
 T enumByName<T extends Enum>(List<T> values, Object? name, T fallback) {
   for (final v in values) {
@@ -28,9 +39,12 @@ class PadButton {
   final String payload;
   final String? label;
   final String? icon;
-  final PadEdge edge;
-  final double along;
-  final double inset;
+
+  /// Center X as a fraction of the canvas width (0..1).
+  final double x;
+
+  /// Center Y as a fraction of the canvas height (0..1).
+  final double y;
 
   const PadButton({
     required this.id,
@@ -38,25 +52,26 @@ class PadButton {
     required this.payload,
     this.label,
     this.icon,
-    this.edge = PadEdge.right,
-    this.along = 0.5,
-    this.inset = 0,
+    this.x = 0.92,
+    this.y = 0.5,
   });
 
   factory PadButton.appAction(
     PadAppAction action, {
     String? id,
-    PadEdge edge = PadEdge.right,
-    double along = 0.5,
-    double inset = 0,
+    String? label,
+    String? icon,
+    double x = 0.92,
+    double y = 0.5,
   }) =>
       PadButton(
         id: id ?? action.name,
         actionKind: PadActionKind.appAction,
         payload: action.name,
-        edge: edge,
-        along: _clamp01(along),
-        inset: inset,
+        label: label,
+        icon: icon ?? _defaultIconForAppAction(action),
+        x: _clamp01(x),
+        y: _clamp01(y),
       );
 
   PadAppAction? get appAction => actionKind == PadActionKind.appAction
@@ -65,16 +80,20 @@ class PadButton {
 
   List<String> get comboParts => payload.split('+');
 
-  PadButton copyWith({PadEdge? edge, double? along, double? inset}) =>
+  PadButton copyWith({
+    String? label,
+    String? icon,
+    double? x,
+    double? y,
+  }) =>
       PadButton(
         id: id,
         actionKind: actionKind,
         payload: payload,
-        label: label,
-        icon: icon,
-        edge: edge ?? this.edge,
-        along: along == null ? this.along : _clamp01(along),
-        inset: inset ?? this.inset,
+        label: label ?? this.label,
+        icon: icon ?? this.icon,
+        x: x == null ? this.x : _clamp01(x),
+        y: y == null ? this.y : _clamp01(y),
       );
 
   Map<String, dynamic> toJson() => {
@@ -83,9 +102,8 @@ class PadButton {
         'payload': payload,
         if (label != null) 'label': label,
         if (icon != null) 'icon': icon,
-        'edge': edge.name,
-        'along': along,
-        'inset': inset,
+        'x': x,
+        'y': y,
       };
 
   static PadButton? tryFromJson(Object? json) {
@@ -95,18 +113,85 @@ class PadButton {
     if (id is! String || payload is! String) return null;
     final kind = json['actionKind'];
     if (!PadActionKind.values.any((k) => k.name == kind)) return null;
-    final along = json['along'];
-    final inset = json['inset'];
+
+    final xy = _xyFromJson(json);
     return PadButton(
       id: id,
       actionKind: enumByName(PadActionKind.values, kind, PadActionKind.key),
       payload: payload,
       label: json['label'] is String ? json['label'] : null,
       icon: json['icon'] is String ? json['icon'] : null,
-      edge: enumByName(PadEdge.values, json['edge'], PadEdge.right),
-      along: along is num ? _clamp01(along) : 0.5,
-      inset: inset is num ? inset.toDouble() : 0,
+      x: xy.$1,
+      y: xy.$2,
     );
+  }
+
+  /// Prefer free x/y; migrate legacy edge/along/inset configs.
+  static (double, double) _xyFromJson(Map json) {
+    final x = json['x'];
+    final y = json['y'];
+    if (x is num && y is num) return (_clamp01(x), _clamp01(y));
+
+    final edge = enumByName(PadEdge.values, json['edge'], PadEdge.right);
+    final along = json['along'] is num ? _clamp01(json['along'] as num) : 0.5;
+    // Fixed margin so v1 edge configs migrate without needing canvas size.
+    const margin = 0.08;
+    switch (edge) {
+      case PadEdge.left:
+        return (margin, along);
+      case PadEdge.right:
+        return (1.0 - margin, along);
+      case PadEdge.top:
+        return (along, margin);
+      case PadEdge.bottom:
+        return (along, 1.0 - margin);
+    }
+  }
+}
+
+String padAppActionLabel(PadAppAction a) {
+  switch (a) {
+    case PadAppAction.menu:
+      return 'Menu';
+    case PadAppAction.sendText:
+      return 'Send text as keystrokes';
+    case PadAppAction.keyboard:
+      return 'Keyboard';
+    case PadAppAction.toggleTwoFinger:
+      return 'Two-finger mode';
+    case PadAppAction.gestureHelp:
+      return 'Touch mode';
+    case PadAppAction.chat:
+      return 'Text chat';
+    case PadAppAction.displays:
+      return 'Display';
+    case PadAppAction.disconnect:
+      return 'Disconnect';
+    case PadAppAction.more:
+      return 'More';
+  }
+}
+
+String _defaultIconForAppAction(PadAppAction a) {
+  switch (a) {
+    case PadAppAction.menu:
+      return 'tune';
+    case PadAppAction.sendText:
+      return 'keyboard_voice';
+    case PadAppAction.keyboard:
+      return 'keyboard';
+    case PadAppAction.toggleTwoFinger:
+      return 'touch_app';
+    case PadAppAction.gestureHelp:
+      return 'gesture';
+    case PadAppAction.chat:
+      return 'message';
+    case PadAppAction.displays:
+      return 'tv';
+    case PadAppAction.disconnect:
+      return 'close';
+    case PadAppAction.more:
+      return 'more_vert';
   }
 }
 
@@ -116,11 +201,24 @@ class PadConfig {
 
   const PadConfig({this.version = kControlPadVersion, required this.buttons});
 
+  /// Menu stays so shortcuts can be edited. The other two match the
+  /// actions people used the voice button and the keyboard key for.
   factory PadConfig.defaults() => PadConfig(buttons: [
-        PadButton.appAction(PadAppAction.menu, along: 0.3),
-        PadButton.appAction(PadAppAction.sendText, along: 0.5),
-        PadButton.appAction(PadAppAction.toggleTwoFinger, along: 0.7),
+        PadButton.appAction(PadAppAction.menu, x: 0.92, y: 0.50),
+        PadButton.appAction(PadAppAction.sendText, x: 0.92, y: 0.64),
+        PadButton.appAction(PadAppAction.keyboard, x: 0.92, y: 0.78),
       ]);
+
+  PadConfig withMenu() {
+    if (buttons.any((b) => b.appAction == PadAppAction.menu)) return this;
+    return PadConfig(
+      version: version,
+      buttons: [
+        PadButton.appAction(PadAppAction.menu, x: 0.92, y: 0.50),
+        ...buttons,
+      ],
+    );
+  }
 
   Map<String, dynamic> toJson() => {
         'version': version,
