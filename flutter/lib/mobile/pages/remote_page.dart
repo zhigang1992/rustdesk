@@ -3,12 +3,15 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_hbb/common/shared_state.dart';
+import 'package:flutter_hbb/common/widgets/control_pad.dart';
 import 'package:flutter_hbb/common/widgets/toolbar.dart';
 import 'package:flutter_hbb/consts.dart';
 import 'package:flutter_hbb/mobile/widgets/floating_mouse.dart';
 import 'package:flutter_hbb/mobile/widgets/floating_mouse_widgets.dart';
 import 'package:flutter_hbb/mobile/widgets/gesture_help.dart';
 import 'package:flutter_hbb/models/chat_model.dart';
+import 'package:flutter_hbb/models/control_pad_model.dart';
+import 'package:flutter_hbb/models/control_pad_store.dart';
 import 'package:flutter_keyboard_visibility/flutter_keyboard_visibility.dart';
 import 'package:flutter_svg/svg.dart';
 import 'package:get/get.dart';
@@ -60,7 +63,8 @@ class RemotePage extends StatefulWidget {
 
 class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
   Timer? _timer;
-  bool _showBar = !isWebDesktop;
+  // Control Pad owns session actions; keep the legacy bottom bar off until Menu.
+  bool _showBar = false;
   bool _showGestureHelp = false;
   String _value = '';
   Orientation? _currentOrientation;
@@ -101,7 +105,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
       forceRelay: widget.forceRelay,
     );
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      SystemChrome.setEnabledSystemUIMode(SystemUiMode.manual, overlays: []);
+      _hideRemoteSystemUi();
       gFFI.dialogManager
           .showLoading(translate('Connecting...'), onCancel: closeConnection);
     });
@@ -175,14 +179,21 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     // `on_voice_call_closed` should be called when the connection is ended.
     // The inner logic of `on_voice_call_closed` will check if the voice call is active.
     // Only one client is considered here for now.
-    gFFI.chatModel.onVoiceCallClosed("End connetion");
+    gFFI.chatModel.onVoiceCallClosed("End connection");
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       trySyncClipboard();
+      _hideRemoteSystemUi();
     }
+  }
+
+  /// iOS only honors this when status-bar appearance is view-controller based.
+  void _hideRemoteSystemUi() {
+    if (keyboardVisibilityController.isVisible && _showEdit) return;
+    SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
   }
 
   // For client side
@@ -240,7 +251,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
 
   void onSoftKeyboardChanged(bool visible) {
     if (!visible) {
-      SystemChrome.setEnabledSystemUIMode(SystemUiMode.manual, overlays: []);
+      _hideRemoteSystemUi();
       // [pi.version.isNotEmpty] -> check ready or not, avoid login without soft-keyboard
       if (gFFI.chatModel.chatWindowOverlayEntry == null &&
           gFFI.ffiModel.pi.version.isNotEmpty) {
@@ -443,7 +454,9 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
   Widget build(BuildContext context) {
     final keyboardIsVisible =
         keyboardVisibilityController.isVisible && _showEdit;
-    final showActionButton = !_showBar || keyboardIsVisible || _showGestureHelp;
+    // Only surface a Scaffold FAB to dismiss keyboard / gesture help.
+    // Session controls live on the Control Pad (voice-FAB style chips).
+    final showDismissFab = keyboardIsVisible || _showGestureHelp;
 
     return WillPopScope(
       onWillPop: () async {
@@ -455,16 +468,11 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
           floatingActionButtonLocation: keyboardIsVisible
               ? FABLocation(FloatingActionButtonLocation.endFloat, 0, -35)
               : null,
-          floatingActionButton: !showActionButton
+          floatingActionButton: !showDismissFab
               ? null
               : FloatingActionButton(
                   mini: !keyboardIsVisible,
-                  child: Icon(
-                    (keyboardIsVisible || _showGestureHelp)
-                        ? Icons.expand_more
-                        : Icons.expand_less,
-                    color: Colors.white,
-                  ),
+                  child: const Icon(Icons.expand_more, color: Colors.white),
                   backgroundColor: MyTheme.accent,
                   onPressed: () {
                     setState(() {
@@ -475,8 +483,6 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                         _physicalFocusNode.requestFocus();
                       } else if (_showGestureHelp) {
                         _showGestureHelp = false;
-                      } else {
-                        _showBar = !_showBar;
                       }
                     });
                   }),
@@ -496,42 +502,157 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                       : Offstage(),
                 ],
               )),
+          // Pad sits outside RawPointerMouseRegion so physical-mouse hits on
+          // chips are not also forwarded as remote desktop clicks.
           body: Obx(
-            () => getRawPointerAndKeyBody(Overlay(
-              initialEntries: [
-                OverlayEntry(builder: (context) {
-                  return Container(
-                    color: kColorCanvas,
-                    child: isWebDesktop
-                        ? getBodyForDesktopWithListener()
-                        : SafeArea(
-                            child:
-                                OrientationBuilder(builder: (ctx, orientation) {
-                              if (_currentOrientation != orientation) {
-                                Timer(const Duration(milliseconds: 200), () {
-                                  gFFI.dialogManager
-                                      .resetMobileActionsOverlay(ffi: gFFI);
-                                  _currentOrientation = orientation;
-                                  gFFI.canvasModel.updateViewStyle();
-                                });
-                              }
-                              return Container(
-                                color: MyTheme.canvasColor,
-                                child: inputModel.isPhysicalMouse.value
-                                    ? getBodyForMobile()
-                                    : RawTouchGestureDetectorRegion(
-                                        child: getBodyForMobile(),
-                                        ffi: gFFI,
-                                      ),
-                              );
-                            }),
-                          ),
-                  );
-                })
+            () => Stack(
+              fit: StackFit.expand,
+              children: [
+                getRawPointerAndKeyBody(Overlay(
+                  initialEntries: [
+                    OverlayEntry(builder: (context) {
+                      return Container(
+                        color: kColorCanvas,
+                        child: isWebDesktop
+                            ? getBodyForDesktopWithListener()
+                            : SafeArea(
+                                top: false,
+                                child: OrientationBuilder(
+                                    builder: (ctx, orientation) {
+                                  if (_currentOrientation != orientation) {
+                                    Timer(const Duration(milliseconds: 200),
+                                        () {
+                                      gFFI.dialogManager
+                                          .resetMobileActionsOverlay(ffi: gFFI);
+                                      _currentOrientation = orientation;
+                                      gFFI.canvasModel.updateViewStyle();
+                                    });
+                                  }
+                                  return Container(
+                                    color: MyTheme.canvasColor,
+                                    child: inputModel.isPhysicalMouse.value
+                                        ? getBodyForMobile()
+                                        : RawTouchGestureDetectorRegion(
+                                            child: getBodyForMobile(),
+                                            ffi: gFFI,
+                                          ),
+                                  );
+                                }),
+                              ),
+                      );
+                    }),
+                  ],
+                )),
+                ControlPadOverlay(onPress: _onControlPadPress),
               ],
-            )),
+            ),
           )),
     );
+  }
+
+  void _onControlPadPress(PadButton b, bool down) {
+    if (!down) return;
+    switch (b.actionKind) {
+      case PadActionKind.appAction:
+        switch (b.appAction) {
+          case PadAppAction.menu:
+            break;
+          case PadAppAction.sendText:
+            final ffiModel = gFFI.ffiModel;
+            if (isWeb ||
+                ffiModel.pi.displays.isEmpty ||
+                ffiModel.viewOnly ||
+                !ffiModel.keyboard) {
+              return;
+            }
+            handleSendTextAsKeystrokes(widget.id, gFFI);
+            break;
+          case PadAppAction.toggleTwoFinger:
+            setTwoFingerMode(isTwoFingerRightDragMode()
+                ? TwoFingerMode.canvas
+                : TwoFingerMode.rightDrag);
+            break;
+          case PadAppAction.keyboard:
+            openKeyboard();
+            break;
+          case PadAppAction.gestureHelp:
+            setState(() => _showGestureHelp = true);
+            break;
+          case PadAppAction.chat:
+            onPressedTextChat(widget.id);
+            break;
+          case PadAppAction.displays:
+            setState(() => _showEdit = false);
+            showOptions(context, widget.id, gFFI.dialogManager);
+            break;
+          case PadAppAction.disconnect:
+            clientClose(sessionId, gFFI);
+            break;
+          case PadAppAction.more:
+            setState(() => _showEdit = false);
+            showActions(widget.id);
+            break;
+          case null:
+            break;
+        }
+        break;
+      case PadActionKind.key:
+        final name = _padKeyName(b.payload);
+        if (name != null) inputModel.inputKey(name);
+        break;
+      case PadActionKind.combo:
+        final parts = b.comboParts
+            .map((p) => p.trim().toLowerCase())
+            .where((p) => p.isNotEmpty)
+            .toList();
+        if (parts.isEmpty) return;
+        final key = _padKeyName(parts.last);
+        if (key == null) return;
+        final mods = parts.sublist(0, parts.length - 1).toSet();
+        bind.sessionInputKey(
+          sessionId: sessionId,
+          name: key,
+          down: false,
+          press: true,
+          alt: mods.contains('alt') || mods.contains('option'),
+          ctrl: mods.contains('ctrl') || mods.contains('control'),
+          shift: mods.contains('shift'),
+          command: mods.contains('cmd') ||
+              mods.contains('command') ||
+              mods.contains('meta') ||
+              mods.contains('win'),
+        );
+        break;
+    }
+  }
+
+  String? _padKeyName(String raw) {
+    final s = raw.trim();
+    if (s.isEmpty) return null;
+    if (s.toUpperCase().startsWith('VK_')) return s.toUpperCase();
+    switch (s.toLowerCase()) {
+      case 'esc':
+      case 'escape':
+        return 'VK_ESCAPE';
+      case 'tab':
+        return 'VK_TAB';
+      case 'enter':
+      case 'return':
+        return 'VK_RETURN';
+      case 'space':
+        return 'VK_SPACE';
+      case 'del':
+      case 'delete':
+        return 'VK_DELETE';
+      case 'backspace':
+        return 'VK_BACK';
+      default:
+        if (RegExp(r'^f([1-9]|1[0-2])$', caseSensitive: false).hasMatch(s)) {
+          return 'VK_${s.toUpperCase()}';
+        }
+        if (s.length == 1) return 'VK_${s.toUpperCase()}';
+        return null;
+    }
   }
 
   Widget getRawPointerAndKeyBody(Widget child) {
@@ -1276,6 +1397,14 @@ void showOptions(
   List<TToggleMenu> cursorToggles = await toolbarCursor(context, id, gFFI);
   List<TToggleMenu> displayToggles =
       await toolbarDisplayToggle(context, id, gFFI);
+  if (isMobile) {
+    displayToggles.insert(
+        0,
+        TToggleMenu(
+            child: Text(translate('Lock canvas')),
+            value: gFFI.canvasModel.locked,
+            onChanged: (value) => gFFI.canvasModel.setLocked(value == true)));
+  }
 
   List<TToggleMenu> privacyModeList = [];
   if ((gFFI.ffiModel.pi.features.privacyMode && gFFI.ffiModel.keyboard) ||

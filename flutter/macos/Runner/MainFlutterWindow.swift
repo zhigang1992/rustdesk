@@ -36,8 +36,28 @@ class RelativeMouseState {
 }
 
 class MainFlutterWindow: NSWindow {
+    private static let fullscreenWorkAreaSizes = NSMapTable<NSWindow, NSValue>(
+        keyOptions: [.weakMemory, .objectPointerPersonality],
+        valueOptions: .strongMemory
+    )
+    private static let fullscreenObserver = NotificationCenter.default.addObserver(
+        forName: NSWindow.willEnterFullScreenNotification,
+        object: nil,
+        queue: .main
+    ) { notification in
+        guard let window = notification.object as? NSWindow,
+              let screen = window.screen else {
+            return
+        }
+        fullscreenWorkAreaSizes.setObject(
+            NSValue(size: screen.visibleFrame.size),
+            forKey: window
+        )
+    }
+
     override func awakeFromNib() {
         rustdesk_core_main();
+        _ = MainFlutterWindow.fullscreenObserver
         let flutterViewController = FlutterViewController.init()
         let windowFrame = self.frame
         self.contentViewController = flutterViewController
@@ -278,9 +298,250 @@ class MainFlutterWindow: NSWindow {
                     self.disableNativeRelativeMouseMode()
                     result(true)
 
+                case "getMacOSWorkAreaSize":
+                    guard Thread.isMainThread,
+                          let window = registrar.view?.window,
+                          let size = MainFlutterWindow.fullscreenWorkAreaSizes
+                            .object(forKey: window)?.sizeValue else {
+                        result(nil)
+                        break
+                    }
+                    result([Double(size.width), Double(size.height)])
+
+                case "showKeystrokeInput":
+                    var title = "Send text as keystrokes"
+                    var send = "Send"
+                    var cancel = "Cancel"
+                    var hint = ""
+                    var appendEnterLabel = "Also send Enter key"
+                    var appendEnter = false
+                    if let arg = call.arguments as? [String: Any] {
+                        title = (arg["title"] as? String) ?? title
+                        send = (arg["send"] as? String) ?? send
+                        cancel = (arg["cancel"] as? String) ?? cancel
+                        hint = (arg["hint"] as? String) ?? hint
+                        appendEnterLabel = (arg["appendEnterLabel"] as? String) ?? appendEnterLabel
+                        appendEnter = (arg["appendEnter"] as? Bool) ?? appendEnter
+                    }
+                    KeystrokeInputPanel.present(
+                        title: title,
+                        sendTitle: send,
+                        cancelTitle: cancel,
+                        hint: hint,
+                        appendEnterLabel: appendEnterLabel,
+                        appendEnter: appendEnter,
+                        completion: { payload in
+                            result(payload)
+                        }
+                    )
+
                 default:
                     result(FlutterMethodNotImplemented)
                 }
         })
+    }
+}
+
+/// Host-side single-line field so dictation / IME run on macOS, not the remote.
+private class KeystrokeInputPanel: NSObject, NSWindowDelegate, NSTextFieldDelegate {
+    static var current: KeystrokeInputPanel?
+
+    private let panel: NSPanel
+    private let textField: NSTextField
+    private let appendEnterCheckbox: NSButton
+    private var completion: (([String: Any]?) -> Void)?
+    private var eventMonitor: Any?
+    private var finished = false
+
+    private init(
+        title: String,
+        sendTitle: String,
+        cancelTitle: String,
+        hint: String,
+        appendEnterLabel: String,
+        appendEnter: Bool,
+        completion: @escaping ([String: Any]?) -> Void
+    ) {
+        self.completion = completion
+
+        let width: CGFloat = 480
+        let buttonHeight: CGFloat = 32
+        let fieldHeight: CGFloat = 24
+        let checkboxHeight: CGFloat = 18
+        let hintHeight: CGFloat = hint.isEmpty ? 0 : 32
+        let topPad: CGFloat = 16
+        let gap: CGFloat = 8
+        let bottomPad: CGFloat = 16
+        // hint + field + checkbox + buttons, with gaps
+        let height = topPad
+            + hintHeight + (hint.isEmpty ? 0 : gap)
+            + fieldHeight + gap
+            + checkboxHeight + gap
+            + buttonHeight + bottomPad
+        panel = NSPanel(
+            contentRect: NSRect(x: 0, y: 0, width: width, height: height),
+            styleMask: [.titled, .closable],
+            backing: .buffered,
+            defer: false
+        )
+        panel.title = title
+        panel.isFloatingPanel = true
+        panel.level = .floating
+        panel.hidesOnDeactivate = false
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        panel.isReleasedWhenClosed = false
+
+        let content = NSView(frame: NSRect(x: 0, y: 0, width: width, height: height))
+        panel.contentView = content
+
+        var y: CGFloat = height - topPad
+        if !hint.isEmpty {
+            y -= hintHeight
+            let hintField = NSTextField(labelWithString: hint)
+            hintField.font = NSFont.systemFont(ofSize: 12)
+            hintField.textColor = .secondaryLabelColor
+            hintField.lineBreakMode = .byWordWrapping
+            hintField.maximumNumberOfLines = 2
+            hintField.frame = NSRect(x: 16, y: y, width: width - 32, height: hintHeight)
+            content.addSubview(hintField)
+            y -= gap
+        }
+
+        y -= fieldHeight
+        textField = NSTextField(frame: NSRect(x: 16, y: y, width: width - 32, height: fieldHeight))
+        textField.font = NSFont.systemFont(ofSize: 14)
+        textField.isEditable = true
+        textField.isSelectable = true
+        textField.isBordered = true
+        textField.bezelStyle = .squareBezel
+        content.addSubview(textField)
+        y -= gap
+
+        y -= checkboxHeight
+        appendEnterCheckbox = NSButton(
+            checkboxWithTitle: appendEnterLabel,
+            target: nil,
+            action: nil
+        )
+        appendEnterCheckbox.frame = NSRect(x: 16, y: y, width: width - 32, height: checkboxHeight)
+        appendEnterCheckbox.state = appendEnter ? .on : .off
+        content.addSubview(appendEnterCheckbox)
+
+        let sendButton = NSButton(title: sendTitle, target: nil, action: nil)
+        sendButton.bezelStyle = .rounded
+        sendButton.keyEquivalent = "\r"
+        let cancelButton = NSButton(title: cancelTitle, target: nil, action: nil)
+        cancelButton.bezelStyle = .rounded
+        cancelButton.keyEquivalent = "\u{1b}"
+
+        let sendSize = sendButton.fittingSize
+        let cancelSize = cancelButton.fittingSize
+        let sendWidth = max(sendSize.width, 80)
+        let cancelWidth = max(cancelSize.width, 80)
+        sendButton.frame = NSRect(x: width - 16 - sendWidth, y: bottomPad, width: sendWidth, height: buttonHeight)
+        cancelButton.frame = NSRect(
+            x: width - 16 - sendWidth - 12 - cancelWidth,
+            y: bottomPad,
+            width: cancelWidth,
+            height: buttonHeight
+        )
+        content.addSubview(sendButton)
+        content.addSubview(cancelButton)
+
+        super.init()
+
+        textField.delegate = self
+        sendButton.target = self
+        sendButton.action = #selector(send)
+        cancelButton.target = self
+        cancelButton.action = #selector(cancel)
+        panel.delegate = self
+
+        if let screen = NSScreen.main ?? NSScreen.screens.first {
+            let visible = screen.visibleFrame
+            panel.setFrameOrigin(NSPoint(
+                x: visible.midX - width / 2,
+                y: visible.midY - height / 2
+            ))
+        }
+
+        eventMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let self = self, event.window == self.panel else { return event }
+            if event.keyCode == 53 {
+                self.cancel()
+                return nil
+            }
+            return event
+        }
+    }
+
+    static func present(
+        title: String,
+        sendTitle: String,
+        cancelTitle: String,
+        hint: String,
+        appendEnterLabel: String,
+        appendEnter: Bool,
+        completion: @escaping ([String: Any]?) -> Void
+    ) {
+        assert(Thread.isMainThread, "showKeystrokeInput must be called on the main thread")
+        if let existing = current {
+            existing.panel.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            completion(nil)
+            return
+        }
+
+        let controller = KeystrokeInputPanel(
+            title: title,
+            sendTitle: sendTitle,
+            cancelTitle: cancelTitle,
+            hint: hint,
+            appendEnterLabel: appendEnterLabel,
+            appendEnter: appendEnter,
+            completion: completion
+        )
+        current = controller
+        NSApp.activate(ignoringOtherApps: true)
+        controller.panel.makeKeyAndOrderFront(nil)
+        controller.panel.makeFirstResponder(controller.textField)
+    }
+
+    func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+        if commandSelector == #selector(NSResponder.insertNewline(_:)) {
+            send()
+            return true
+        }
+        return false
+    }
+
+    @objc private func send() {
+        finish([
+            "text": textField.stringValue,
+            "appendEnter": appendEnterCheckbox.state == .on,
+        ])
+    }
+
+    @objc private func cancel() {
+        finish(nil)
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        finish(nil)
+    }
+
+    private func finish(_ payload: [String: Any]?) {
+        guard !finished else { return }
+        finished = true
+        if let monitor = eventMonitor {
+            NSEvent.removeMonitor(monitor)
+            eventMonitor = nil
+        }
+        completion?(payload)
+        completion = nil
+        panel.orderOut(nil)
+        if KeystrokeInputPanel.current === self {
+            KeystrokeInputPanel.current = nil
+        }
     }
 }

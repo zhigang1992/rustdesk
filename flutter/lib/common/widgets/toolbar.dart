@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_hbb/common.dart';
 import 'package:flutter_hbb/common/shared_state.dart';
 import 'package:flutter_hbb/common/widgets/dialog.dart';
+import 'package:flutter_hbb/common/widgets/keystroke_input.dart';
 import 'package:flutter_hbb/common/widgets/login.dart';
 import 'package:flutter_hbb/consts.dart';
 import 'package:flutter_hbb/desktop/widgets/remote_toolbar.dart';
@@ -144,6 +145,33 @@ handleOsPasswordEditIcon(
   isEditOsPassword = true;
   showSetOSPassword(
       sessionId, false, dialogManager, null, () => isEditOsPassword = false);
+}
+
+Future<void> handleSendTextAsKeystrokes(String id, FFI ffi) async {
+  Future<void> send() => promptAndSendKeystrokes(
+        peerId: id,
+        ffi: ffi,
+      );
+
+  final isWaylandPeer = ffi.ffiModel.pi.platform == kPeerPlatformLinux &&
+      ffi.ffiModel.pi.isWayland;
+  final allowWaylandKeyboard =
+      mainGetPeerBoolOptionSync(id, kPeerOptionAllowWaylandKeyboard);
+  if (shouldShowWaylandKeyboardPrompt(
+    connectionId: ffi.sessionId.toString(),
+    isWaylandPeer: isWaylandPeer,
+    allowWaylandKeyboardRemembered: allowWaylandKeyboard,
+  )) {
+    ffi.inputModel.keyboardInputAllowed = false;
+    showWaylandKeyboardInputWarningDialog(
+      id: id,
+      connectionId: ffi.sessionId.toString(),
+      ffi: ffi,
+      onEnable: send,
+    );
+    return;
+  }
+  await send();
 }
 
 handleOsPasswordAction(
@@ -349,12 +377,12 @@ List<TTextMenu> toolbarControls(BuildContext context, String id, FFI ffi) {
               showRequestElevationDialog(sessionId, ffi.dialogManager)),
     );
   }
-  // osAccount / osPassword
+  // osPassword
   if (isDefaultConn && perms['keyboard'] != false) {
     v.add(
       TTextMenu(
         child: Row(children: [
-          Text(translate(pi.isHeadless ? 'OS Account' : 'OS Password')),
+          Text(translate('OS Password')),
         ]),
         trailingIcon: Transform.scale(
           scale: (isDesktop || isWebDesktop) ? 0.8 : 1,
@@ -363,18 +391,12 @@ List<TTextMenu> toolbarControls(BuildContext context, String id, FFI ffi) {
               if (isMobile && Navigator.canPop(context)) {
                 Navigator.pop(context);
               }
-              if (pi.isHeadless) {
-                showSetOSAccount(sessionId, ffi.dialogManager);
-              } else {
-                handleOsPasswordEditIcon(sessionId, ffi.dialogManager);
-              }
+              handleOsPasswordEditIcon(sessionId, ffi.dialogManager);
             },
             icon: Icon(Icons.edit, color: isMobile ? MyTheme.accent : null),
           ),
         ),
-        onPressed: () => pi.isHeadless
-            ? showSetOSAccount(sessionId, ffi.dialogManager)
-            : handleOsPasswordAction(sessionId, ffi.dialogManager),
+        onPressed: () => handleOsPasswordAction(sessionId, ffi.dialogManager),
       ),
     );
   }
@@ -411,6 +433,16 @@ List<TTextMenu> toolbarControls(BuildContext context, String id, FFI ffi) {
           }
           await sendClipboardKeystrokes();
         }));
+    v.add(TTextMenu(
+        child: Text(translate('Send text as keystrokes')),
+        trailingIcon: Text(
+          sendTextAsKeystrokesShortcutLabel(),
+          style: TextStyle(
+            fontSize: 12,
+            color: Theme.of(context).hintColor,
+          ),
+        ),
+        onPressed: () => handleSendTextAsKeystrokes(id, ffi)));
   }
   if (isDefaultConn &&
       isWaylandPeer &&
