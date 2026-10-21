@@ -12,7 +12,23 @@ enum PadAppAction {
   displays,
   disconnect,
   more,
+  resetCanvas,
+  sendClipboard,
+  refresh,
+  ctrlAltDel,
+  lock,
+  osPassword,
+  elevation,
+  fingerprint,
+  blockInput,
+  recording,
+  showRemoteCursor,
+  mute,
+  privacyMode,
+  lockCanvas,
 }
+
+enum PadFace { icon, text }
 
 /// Legacy edge enum kept only so v1 configs can migrate to free x/y.
 enum PadEdge { left, right, top, bottom }
@@ -40,6 +56,11 @@ class PadButton {
   final String? label;
   final String? icon;
 
+  /// Shown while a toggle action is on. Ignored for one-shot actions.
+  final String? labelOn;
+  final String? iconOn;
+  final PadFace face;
+
   /// Center X as a fraction of the canvas width (0..1).
   final double x;
 
@@ -52,6 +73,9 @@ class PadButton {
     required this.payload,
     this.label,
     this.icon,
+    this.labelOn,
+    this.iconOn,
+    this.face = PadFace.icon,
     this.x = 0.92,
     this.y = 0.5,
   });
@@ -61,6 +85,9 @@ class PadButton {
     String? id,
     String? label,
     String? icon,
+    String? labelOn,
+    String? iconOn,
+    PadFace face = PadFace.icon,
     double x = 0.92,
     double y = 0.5,
   }) =>
@@ -69,7 +96,10 @@ class PadButton {
         actionKind: PadActionKind.appAction,
         payload: action.name,
         label: label,
-        icon: icon ?? _defaultIconForAppAction(action),
+        icon: icon ?? padAppActionIcon(action),
+        labelOn: labelOn,
+        iconOn: iconOn ?? padAppActionIconOn(action),
+        face: face,
         x: _clamp01(x),
         y: _clamp01(y),
       );
@@ -83,6 +113,9 @@ class PadButton {
   PadButton copyWith({
     String? label,
     String? icon,
+    String? labelOn,
+    String? iconOn,
+    PadFace? face,
     double? x,
     double? y,
   }) =>
@@ -92,6 +125,9 @@ class PadButton {
         payload: payload,
         label: label ?? this.label,
         icon: icon ?? this.icon,
+        labelOn: labelOn ?? this.labelOn,
+        iconOn: iconOn ?? this.iconOn,
+        face: face ?? this.face,
         x: x == null ? this.x : _clamp01(x),
         y: y == null ? this.y : _clamp01(y),
       );
@@ -102,6 +138,9 @@ class PadButton {
         'payload': payload,
         if (label != null) 'label': label,
         if (icon != null) 'icon': icon,
+        if (labelOn != null) 'labelOn': labelOn,
+        if (iconOn != null) 'iconOn': iconOn,
+        if (face != PadFace.icon) 'face': face.name,
         'x': x,
         'y': y,
       };
@@ -121,6 +160,9 @@ class PadButton {
       payload: payload,
       label: json['label'] is String ? json['label'] : null,
       icon: json['icon'] is String ? json['icon'] : null,
+      labelOn: json['labelOn'] is String ? json['labelOn'] : null,
+      iconOn: json['iconOn'] is String ? json['iconOn'] : null,
+      face: enumByName(PadFace.values, json['face'], PadFace.icon),
       x: xy.$1,
       y: xy.$2,
     );
@@ -169,10 +211,53 @@ String padAppActionLabel(PadAppAction a) {
       return 'Disconnect';
     case PadAppAction.more:
       return 'More';
+    case PadAppAction.resetCanvas:
+      return 'Reset canvas';
+    case PadAppAction.sendClipboard:
+      return 'Send clipboard keystrokes';
+    case PadAppAction.refresh:
+      return 'Refresh';
+    case PadAppAction.ctrlAltDel:
+      return 'Insert Ctrl + Alt + Del';
+    case PadAppAction.lock:
+      return 'Insert Lock';
+    case PadAppAction.osPassword:
+      return 'OS Password';
+    case PadAppAction.elevation:
+      return 'Request Elevation';
+    case PadAppAction.fingerprint:
+      return 'Copy Fingerprint';
+    case PadAppAction.blockInput:
+      return 'Block user input';
+    case PadAppAction.recording:
+      return 'Start session recording';
+    case PadAppAction.showRemoteCursor:
+      return 'Show remote cursor';
+    case PadAppAction.mute:
+      return 'Mute';
+    case PadAppAction.privacyMode:
+      return 'Privacy mode';
+    case PadAppAction.lockCanvas:
+      return 'Lock canvas';
   }
 }
 
-String _defaultIconForAppAction(PadAppAction a) {
+bool padAppActionIsToggle(PadAppAction a) {
+  switch (a) {
+    case PadAppAction.toggleTwoFinger:
+    case PadAppAction.blockInput:
+    case PadAppAction.recording:
+    case PadAppAction.showRemoteCursor:
+    case PadAppAction.mute:
+    case PadAppAction.privacyMode:
+    case PadAppAction.lockCanvas:
+      return true;
+    default:
+      return false;
+  }
+}
+
+String padAppActionIcon(PadAppAction a) {
   switch (a) {
     case PadAppAction.menu:
       return 'tune';
@@ -181,7 +266,7 @@ String _defaultIconForAppAction(PadAppAction a) {
     case PadAppAction.keyboard:
       return 'keyboard';
     case PadAppAction.toggleTwoFinger:
-      return 'touch_app';
+      return 'pinch';
     case PadAppAction.gestureHelp:
       return 'gesture';
     case PadAppAction.chat:
@@ -192,6 +277,55 @@ String _defaultIconForAppAction(PadAppAction a) {
       return 'close';
     case PadAppAction.more:
       return 'more_vert';
+    case PadAppAction.resetCanvas:
+      return 'fit_screen';
+    case PadAppAction.sendClipboard:
+      return 'content_paste';
+    case PadAppAction.refresh:
+      return 'refresh';
+    case PadAppAction.ctrlAltDel:
+      return 'keyboard';
+    case PadAppAction.lock:
+      return 'lock';
+    case PadAppAction.osPassword:
+      return 'password';
+    case PadAppAction.elevation:
+      return 'security';
+    case PadAppAction.fingerprint:
+      return 'fingerprint';
+    case PadAppAction.blockInput:
+      return 'back_hand';
+    case PadAppAction.recording:
+      return 'videocam';
+    case PadAppAction.showRemoteCursor:
+      return 'mouse';
+    case PadAppAction.mute:
+      return 'volume_up';
+    case PadAppAction.privacyMode:
+      return 'visibility';
+    case PadAppAction.lockCanvas:
+      return 'lock_open';
+  }
+}
+
+String? padAppActionIconOn(PadAppAction a) {
+  switch (a) {
+    case PadAppAction.toggleTwoFinger:
+      return 'mouse';
+    case PadAppAction.blockInput:
+      return 'front_hand';
+    case PadAppAction.recording:
+      return 'pause';
+    case PadAppAction.showRemoteCursor:
+      return 'highlight_mouse';
+    case PadAppAction.mute:
+      return 'volume_off';
+    case PadAppAction.privacyMode:
+      return 'visibility_off';
+    case PadAppAction.lockCanvas:
+      return 'lock';
+    default:
+      return null;
   }
 }
 

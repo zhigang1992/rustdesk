@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_hbb/common.dart';
+import 'package:flutter_hbb/common/widgets/control_pad_editor.dart';
 import 'package:flutter_hbb/models/control_pad_model.dart';
 import 'package:flutter_hbb/models/control_pad_store.dart';
 
@@ -22,12 +23,16 @@ class ControlPadOverlay extends StatefulWidget {
   /// Tests pass an identity function. The app uses [translate].
   final String Function(String key)? strings;
 
+  /// Live on/off for toggle actions. Read during build so the face updates.
+  final bool Function(PadButton button)? isOn;
+
   const ControlPadOverlay({
     Key? key,
     this.onPress,
     this.initialButtons,
     this.persist = true,
     this.strings,
+    this.isOn,
   }) : super(key: key);
 
   @override
@@ -78,18 +83,22 @@ class _ControlPadOverlayState extends State<ControlPadOverlay> {
     await showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
-      builder: (ctx) => _PadEditor(
+      builder: (ctx) => PadEditor(
         buttons: List<PadButton>.from(_buttons),
         labelOf: _t,
-        onAdd: (b) {
-          _place(b);
-          Navigator.pop(ctx);
-        },
+        onAdd: _place,
         onRemove: (b) {
           if (b.appAction == PadAppAction.menu) return;
           setState(() => _buttons.removeWhere((e) => e.id == b.id));
           _save();
-          Navigator.pop(ctx);
+        },
+        onUpdate: (b) {
+          setState(() {
+            final i = _buttons.indexWhere((e) => e.id == b.id);
+            if (i < 0) return;
+            _buttons[i] = b.copyWith(x: _buttons[i].x, y: _buttons[i].y);
+          });
+          _save();
         },
       ),
     );
@@ -181,18 +190,27 @@ class _ControlPadOverlayState extends State<ControlPadOverlay> {
   }
 
   String _faceLabel(PadButton b) {
+    final on = _isOn(b);
+    if (on && b.labelOn != null && b.labelOn!.isNotEmpty) return b.labelOn!;
     if (b.label != null && b.label!.isNotEmpty) return b.label!;
     final action = b.appAction;
     if (action != null) return _t(padAppActionLabel(action));
     return b.payload;
   }
 
+  bool _isOn(PadButton b) {
+    final action = b.appAction;
+    if (action == null || !padAppActionIsToggle(action)) return false;
+    return widget.isOn?.call(b) == true;
+  }
+
   Widget _face(PadButton b) {
-    final showText = b.actionKind != PadActionKind.appAction &&
-        b.label != null &&
-        b.label!.isNotEmpty;
-    if (showText) {
-      final text = b.label!.length > 4 ? b.label!.substring(0, 4) : b.label!;
+    final on = _isOn(b);
+    if (b.face == PadFace.text) {
+      final raw = on && b.labelOn != null && b.labelOn!.isNotEmpty
+          ? b.labelOn!
+          : (b.label ?? _faceLabel(b));
+      final text = raw.length > 4 ? raw.substring(0, 4) : raw;
       return Text(
         text,
         style: const TextStyle(
@@ -202,64 +220,16 @@ class _ControlPadOverlayState extends State<ControlPadOverlay> {
         ),
       );
     }
-    return Icon(_iconOf(b), color: Colors.white, size: 26);
+    return Icon(padIconData(_iconName(b, on)), color: Colors.white, size: 26);
   }
 
-  IconData _iconOf(PadButton b) {
-    final name = (b.icon != null && b.icon!.isNotEmpty)
-        ? b.icon!
-        : (b.appAction == null ? '' : _defaultIconFor(b.appAction!));
-    return _iconData(name);
-  }
-
-  String _defaultIconFor(PadAppAction a) {
-    switch (a) {
-      case PadAppAction.menu:
-        return 'tune';
-      case PadAppAction.sendText:
-        return 'keyboard_voice';
-      case PadAppAction.keyboard:
-        return 'keyboard';
-      case PadAppAction.toggleTwoFinger:
-        return 'touch_app';
-      case PadAppAction.gestureHelp:
-        return 'gesture';
-      case PadAppAction.chat:
-        return 'message';
-      case PadAppAction.displays:
-        return 'tv';
-      case PadAppAction.disconnect:
-        return 'close';
-      case PadAppAction.more:
-        return 'more_vert';
-    }
-  }
-
-  IconData _iconData(String name) {
-    switch (name) {
-      case 'tune':
-        return Icons.tune;
-      case 'keyboard_voice':
-        return Icons.keyboard_voice;
-      case 'keyboard':
-        return Icons.keyboard;
-      case 'touch_app':
-        return Icons.touch_app;
-      case 'gesture':
-        return Icons.gesture;
-      case 'message':
-        return Icons.message;
-      case 'tv':
-        return Icons.tv;
-      case 'close':
-        return Icons.close;
-      case 'more_vert':
-        return Icons.more_vert;
-      case 'text_fields':
-        return Icons.text_fields;
-      default:
-        return Icons.circle;
-    }
+  String _iconName(PadButton b, bool on) {
+    if (on && b.iconOn != null && b.iconOn!.isNotEmpty) return b.iconOn!;
+    if (b.icon != null && b.icon!.isNotEmpty) return b.icon!;
+    final action = b.appAction;
+    if (action == null) return '';
+    if (on) return padAppActionIconOn(action) ?? padAppActionIcon(action);
+    return padAppActionIcon(action);
   }
 
   @override
@@ -271,198 +241,5 @@ class _ControlPadOverlayState extends State<ControlPadOverlay> {
         children: [for (final b in _buttons) _chip(b, size)],
       );
     });
-  }
-}
-
-class _PadEditor extends StatefulWidget {
-  final List<PadButton> buttons;
-  final String Function(String key) labelOf;
-  final void Function(PadButton button) onAdd;
-  final void Function(PadButton button) onRemove;
-
-  const _PadEditor({
-    required this.buttons,
-    required this.labelOf,
-    required this.onAdd,
-    required this.onRemove,
-  });
-
-  @override
-  State<_PadEditor> createState() => _PadEditorState();
-}
-
-class _PadEditorState extends State<_PadEditor> {
-  final _keyCtrl = TextEditingController();
-  final _comboKeyCtrl = TextEditingController();
-  final _mods = <String>{};
-
-  static const _catalog = <PadAppAction>[
-    PadAppAction.sendText,
-    PadAppAction.keyboard,
-    PadAppAction.gestureHelp,
-    PadAppAction.chat,
-    PadAppAction.displays,
-    PadAppAction.disconnect,
-    PadAppAction.more,
-    PadAppAction.toggleTwoFinger,
-  ];
-
-  @override
-  void dispose() {
-    _keyCtrl.dispose();
-    _comboKeyCtrl.dispose();
-    super.dispose();
-  }
-
-  bool _has(PadAppAction a) => widget.buttons.any((b) => b.appAction == a);
-
-  String _title(PadButton b) {
-    if (b.label != null && b.label!.isNotEmpty) return b.label!;
-    final action = b.appAction;
-    if (action != null) return widget.labelOf(padAppActionLabel(action));
-    return b.payload;
-  }
-
-  void _addKey() {
-    final raw = _keyCtrl.text.trim();
-    if (raw.isEmpty) return;
-    widget.onAdd(PadButton(
-      id: 'key-${DateTime.now().microsecondsSinceEpoch}',
-      actionKind: PadActionKind.key,
-      payload: raw,
-      label: raw,
-    ));
-  }
-
-  void _addCombo() {
-    final raw = _comboKeyCtrl.text.trim();
-    if (raw.isEmpty || _mods.isEmpty) return;
-    final payload = '${_mods.join('+')}+$raw';
-    widget.onAdd(PadButton(
-      id: 'combo-${DateTime.now().microsecondsSinceEpoch}',
-      actionKind: PadActionKind.combo,
-      payload: payload,
-      label: payload,
-    ));
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final missing = [for (final a in _catalog) if (!_has(a)) a];
-    return SafeArea(
-      child: ListView(
-        shrinkWrap: true,
-        children: [
-          ListTile(
-            title: Text(widget.labelOf('Menu'),
-                style: const TextStyle(fontWeight: FontWeight.w700)),
-            subtitle: Text(widget.labelOf('Edit shortcuts')),
-          ),
-          for (final b in widget.buttons)
-            if (b.appAction != PadAppAction.menu)
-              ListTile(
-                title: Text(_title(b)),
-                trailing: IconButton(
-                  icon: const Icon(Icons.delete_outline),
-                  onPressed: () => widget.onRemove(b),
-                ),
-              ),
-          if (missing.isNotEmpty) const Divider(),
-          for (final a in missing)
-            ListTile(
-              leading: Icon(_catalogIcon(a)),
-              title: Text(widget.labelOf(padAppActionLabel(a))),
-              trailing: const Icon(Icons.add),
-              onTap: () => widget.onAdd(PadButton.appAction(a)),
-            ),
-          const Divider(),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: Text(widget.labelOf('Key')),
-          ),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
-            child: Row(children: [
-              Expanded(
-                child: TextField(
-                  controller: _keyCtrl,
-                  decoration: InputDecoration(
-                    hintText: 'Esc, F5, Enter',
-                    isDense: true,
-                  ),
-                ),
-              ),
-              const SizedBox(width: 8),
-              TextButton(
-                  onPressed: _addKey, child: Text(widget.labelOf('Add'))),
-            ]),
-          ),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: Text(widget.labelOf('Combo')),
-          ),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-            child: Wrap(
-              spacing: 8,
-              children: [
-                for (final m in const ['ctrl', 'alt', 'shift', 'command'])
-                  FilterChip(
-                    label: Text(m),
-                    selected: _mods.contains(m),
-                    onSelected: (v) => setState(() {
-                      if (v) {
-                        _mods.add(m);
-                      } else {
-                        _mods.remove(m);
-                      }
-                    }),
-                  ),
-              ],
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-            child: Row(children: [
-              Expanded(
-                child: TextField(
-                  controller: _comboKeyCtrl,
-                  decoration: const InputDecoration(
-                    hintText: 'delete',
-                    isDense: true,
-                  ),
-                ),
-              ),
-              const SizedBox(width: 8),
-              TextButton(
-                  onPressed: _addCombo, child: Text(widget.labelOf('Add'))),
-            ]),
-          ),
-        ],
-      ),
-    );
-  }
-
-  IconData _catalogIcon(PadAppAction a) {
-    switch (a) {
-      case PadAppAction.sendText:
-        return Icons.keyboard_voice;
-      case PadAppAction.keyboard:
-        return Icons.keyboard;
-      case PadAppAction.gestureHelp:
-        return Icons.gesture;
-      case PadAppAction.chat:
-        return Icons.message;
-      case PadAppAction.displays:
-        return Icons.tv;
-      case PadAppAction.disconnect:
-        return Icons.close;
-      case PadAppAction.more:
-        return Icons.more_vert;
-      case PadAppAction.toggleTwoFinger:
-        return Icons.touch_app;
-      case PadAppAction.menu:
-        return Icons.tune;
-    }
   }
 }

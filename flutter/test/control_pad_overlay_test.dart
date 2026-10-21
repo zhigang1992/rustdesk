@@ -63,9 +63,34 @@ void main() {
     await tester.pump(const Duration(milliseconds: 400));
 
     expect(find.text('Send text as keystrokes'), findsOneWidget);
-    expect(find.text('Keyboard'), findsOneWidget);
+    expect(find.text('Add'), findsOneWidget);
+
+    await tester.tap(find.text('Add'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 200));
+    expect(find.text('Action'), findsOneWidget);
     expect(find.text('Key'), findsOneWidget);
-    expect(find.text('Combo'), findsOneWidget);
     expect(pressed?.appAction, PadAppAction.sendText);
+  });
+
+  testWidgets('a toggle button shows its on icon while the setting is on',
+      (tester) async {
+    await tester.binding.setSurfaceSize(const Size(400, 800));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(MaterialApp(
+      home: Scaffold(
+        body: ControlPadOverlay(
+          persist: false,
+          strings: (s) => s,
+          isOn: (_) => true,
+          initialButtons: [
+            PadButton.appAction(PadAppAction.toggleTwoFinger, x: 0.5, y: 0.5),
+          ],
+        ),
+      ),
+    ));
+    await tester.pump();
+    expect(find.byIcon(Icons.mouse), findsOneWidget);
+    expect(find.byIcon(Icons.pinch), findsNothing);
   });
 }

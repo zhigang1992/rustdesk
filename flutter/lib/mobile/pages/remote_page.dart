@@ -543,11 +543,51 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                     }),
                   ],
                 )),
-                ControlPadOverlay(onPress: _onControlPadPress),
+                ControlPadOverlay(
+                  onPress: _onControlPadPress,
+                  isOn: _padIsOn,
+                ),
               ],
             ),
           )),
     );
+  }
+
+  bool _padIsOn(PadButton b) {
+    switch (b.appAction) {
+      case PadAppAction.toggleTwoFinger:
+        return isTwoFingerRightDragMode();
+      case PadAppAction.blockInput:
+        return BlockInputState.find(widget.id).value;
+      case PadAppAction.recording:
+        return gFFI.recordingModel.start;
+      case PadAppAction.showRemoteCursor:
+        return ShowRemoteCursorState.find(widget.id).value;
+      case PadAppAction.mute:
+        return bind.sessionGetToggleOptionSync(
+            sessionId: sessionId, arg: 'disable-audio');
+      case PadAppAction.privacyMode:
+        return PrivacyModeState.find(widget.id).isNotEmpty;
+      case PadAppAction.lockCanvas:
+        return gFFI.canvasModel.locked;
+      default:
+        return false;
+    }
+  }
+
+  void _togglePadOption(String option, void Function(bool value) apply) {
+    bind.sessionToggleOption(sessionId: sessionId, value: option).then((_) {
+      if (!mounted) return;
+      apply(bind.sessionGetToggleOptionSync(sessionId: sessionId, arg: option));
+      setState(() {});
+    });
+  }
+
+  Future<void> _sendClipboardKeystrokes() async {
+    final data = await Clipboard.getData(Clipboard.kTextPlain);
+    final text = data?.text;
+    if (text == null || text.isEmpty) return;
+    await bind.sessionInputString(sessionId: sessionId, value: text);
   }
 
   void _onControlPadPress(PadButton b, bool down) {
@@ -591,6 +631,59 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
           case PadAppAction.more:
             setState(() => _showEdit = false);
             showActions(widget.id);
+            break;
+          case PadAppAction.resetCanvas:
+            gFFI.cursorModel.reset();
+            break;
+          case PadAppAction.sendClipboard:
+            _sendClipboardKeystrokes();
+            break;
+          case PadAppAction.refresh:
+            sessionRefreshVideo(sessionId, gFFI.ffiModel.pi);
+            break;
+          case PadAppAction.ctrlAltDel:
+            bind.sessionCtrlAltDel(sessionId: sessionId);
+            break;
+          case PadAppAction.lock:
+            bind.sessionLockScreen(sessionId: sessionId);
+            break;
+          case PadAppAction.osPassword:
+            handleOsPasswordAction(sessionId, gFFI.dialogManager);
+            break;
+          case PadAppAction.elevation:
+            showRequestElevationDialog(sessionId, gFFI.dialogManager);
+            break;
+          case PadAppAction.fingerprint:
+            onCopyFingerprint(FingerprintState.find(widget.id).value);
+            break;
+          case PadAppAction.blockInput:
+            final blockInput = BlockInputState.find(widget.id);
+            bind.sessionToggleOption(
+                sessionId: sessionId,
+                value: '${blockInput.value ? 'un' : ''}block-input');
+            blockInput.value = !blockInput.value;
+            break;
+          case PadAppAction.recording:
+            gFFI.recordingModel.toggle();
+            setState(() {});
+            break;
+          case PadAppAction.showRemoteCursor:
+            _togglePadOption('show-remote-cursor', (value) {
+              ShowRemoteCursorState.find(widget.id).value = value;
+            });
+            break;
+          case PadAppAction.mute:
+            _togglePadOption('disable-audio', (_) => setState(() {}));
+            break;
+          case PadAppAction.privacyMode:
+            final privacy = PrivacyModeState.find(widget.id);
+            final menus =
+                toolbarPrivacyMode(privacy, context, widget.id, gFFI);
+            if (menus.isNotEmpty) menus.first.onChanged?.call(privacy.isEmpty);
+            break;
+          case PadAppAction.lockCanvas:
+            gFFI.canvasModel.setLocked(!gFFI.canvasModel.locked);
+            setState(() {});
             break;
           case null:
             break;

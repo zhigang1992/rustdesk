@@ -17,6 +17,11 @@ void main() {
       'keyboard_voice',
       'keyboard',
     ]);
+    final twoFinger = PadButton.appAction(PadAppAction.toggleTwoFinger);
+    expect(twoFinger.icon, 'pinch');
+    expect(twoFinger.iconOn, 'mouse');
+    expect(padAppActionIsToggle(PadAppAction.toggleTwoFinger), isTrue);
+    expect(padAppActionIsToggle(PadAppAction.resetCanvas), isFalse);
   });
 
   test('migrates legacy edge/along configs to x/y', () {
