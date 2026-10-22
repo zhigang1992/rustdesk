@@ -51,6 +51,9 @@ class ControlPadOverlay extends StatefulWidget {
   /// Live on/off for toggle actions. Read during build so the face updates.
   final bool Function(PadButton button)? isOn;
 
+  /// Tests pass this so a recent row does not touch the native option store.
+  final List<String>? initialRecent;
+
   const ControlPadOverlay({
     Key? key,
     this.onPress,
@@ -58,6 +61,7 @@ class ControlPadOverlay extends StatefulWidget {
     this.persist = true,
     this.strings,
     this.isOn,
+    this.initialRecent,
   }) : super(key: key);
 
   @override
@@ -67,6 +71,10 @@ class ControlPadOverlay extends StatefulWidget {
 class _ControlPadOverlayState extends State<ControlPadOverlay> {
   late final List<PadButton> _buttons = List<PadButton>.from(
       (widget.initialButtons ?? loadControlPad().buttons));
+  late final List<String> _recent = List<String>.from(widget.initialRecent ??
+      (widget.initialButtons != null || !widget.persist
+          ? const <String>[]
+          : loadControlPad().recent));
   String? _dragId;
   Offset _dragCenter = Offset.zero;
   Offset? _panOrigin;
@@ -93,8 +101,21 @@ class _ControlPadOverlayState extends State<ControlPadOverlay> {
   void _save() {
     if (!widget.persist) return;
     final snapshot = List<PadButton>.from(_buttons);
-    _saveChain =
-        _saveChain.then((_) => saveControlPad(PadConfig(buttons: snapshot)));
+    final recent = List<String>.from(_recent);
+    _saveChain = _saveChain.then((_) =>
+        saveControlPad(PadConfig(buttons: snapshot, recent: recent)));
+  }
+
+  void _remember(PadAppAction? action) {
+    if (action == null || action == PadAppAction.menu) return;
+    setState(() {
+      _recent.remove(action.name);
+      _recent.insert(0, action.name);
+      if (_recent.length > 10) {
+        _recent.removeRange(10, _recent.length);
+      }
+    });
+    _save();
   }
 
   void _place(PadButton b) {
@@ -124,7 +145,13 @@ class _ControlPadOverlayState extends State<ControlPadOverlay> {
         });
         _save();
       },
+      recent: [
+        for (final name in _recent)
+          if (PadAppAction.values.any((a) => a.name == name))
+            PadAppAction.values.firstWhere((a) => a.name == name),
+      ],
       onQuick: (action) {
+        _remember(action);
         widget.onPress?.call(PadButton.appAction(action), true);
       },
     );
@@ -218,7 +245,6 @@ class _ControlPadOverlayState extends State<ControlPadOverlay> {
   }
 
   Future<void> _showButtonMenu(PadButton b, Offset global) async {
-    if (b.appAction == PadAppAction.menu) return;
     final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
     final position = RelativeRect.fromRect(
       Rect.fromLTWH(global.dx, global.dy, 0, 0),
@@ -228,7 +254,12 @@ class _ControlPadOverlayState extends State<ControlPadOverlay> {
       context: context,
       position: position,
       items: [
-        PopupMenuItem(value: 'delete', child: Text(_t('Delete'))),
+        PopupMenuItem(
+          enabled: false,
+          child: Text(_faceLabel(b)),
+        ),
+        if (b.appAction != PadAppAction.menu)
+          PopupMenuItem(value: 'delete', child: Text(_t('Delete'))),
       ],
     );
     if (!mounted || value != 'delete') return;
@@ -244,6 +275,7 @@ class _ControlPadOverlayState extends State<ControlPadOverlay> {
       });
       return;
     }
+    _remember(b.appAction);
     widget.onPress?.call(b, true);
   }
 

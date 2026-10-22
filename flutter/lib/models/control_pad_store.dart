@@ -14,7 +14,10 @@ PadConfig loadControlPad() {
   if (decoded.version < kControlPadVersion) {
     final next = cfg.withTouchToggle();
     if (next.version >= kControlPadVersion) return next;
-    return PadConfig(version: kControlPadVersion, buttons: next.buttons);
+    return PadConfig(
+        version: kControlPadVersion,
+        buttons: next.buttons,
+        recent: next.recent);
   }
   return cfg;
 }

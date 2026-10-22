@@ -51,6 +51,25 @@ void main() {
     expect(next.withTouchToggle().buttons.length, 2);
   });
 
+  test('recent actions stay newest-first and cap at ten', () {
+    final names = [
+      for (final action in PadAppAction.values)
+        if (action != PadAppAction.menu) action.name,
+    ];
+    final recentJson = names.take(12).map((n) => '"$n"').join(',');
+    final back = PadConfig.tryDecode(
+        '{"version":4,"buttons":[],"recent":[$recentJson]}')!;
+    expect(back.recent, names.take(10).toList());
+
+    final kept = PadConfig(
+      buttons: [PadButton.appAction(PadAppAction.keyboard, x: 0.2, y: 0.3)],
+      recent: const ['keyboard', 'menu', 'nope', 'refresh', 'keyboard'],
+    );
+    expect(PadConfig.tryDecode(kept.encode())!.recent,
+        ['keyboard', 'refresh']);
+    expect(kept.withMenu().recent, ['keyboard', 'menu', 'nope', 'refresh', 'keyboard']);
+  });
+
   test('withMenu inserts the editor button without moving the others', () {
     final cfg = PadConfig(buttons: [
       PadButton.appAction(PadAppAction.keyboard, x: 0.2, y: 0.3),

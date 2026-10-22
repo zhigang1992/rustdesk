@@ -105,6 +105,9 @@ class PadEditor extends StatefulWidget {
   final void Function(PadButton button) onUpdate;
   final void Function(PadAppAction action)? onQuick;
 
+  /// Newest first. Shown above the grouped actions.
+  final List<PadAppAction> recent;
+
   const PadEditor({
     Key? key,
     required this.buttons,
@@ -113,6 +116,7 @@ class PadEditor extends StatefulWidget {
     required this.onRemove,
     required this.onUpdate,
     this.onQuick,
+    this.recent = const [],
   }) : super(key: key);
 
   @override
@@ -299,31 +303,68 @@ class _PadEditorState extends State<PadEditor> {
           title: Text(widget.labelOf('Add')),
           onTap: () => setState(() => _step = _Step.kind),
         ),
-        if (widget.onQuick != null) _quickActions(),
+        if (widget.onQuick != null) ..._quickSections(),
       ],
     );
   }
 
-  Widget _quickActions() {
-    final actions = [for (final group in _groups.values) ...group];
-    return SizedBox(
-      height: 48,
-      child: ListView(
-        scrollDirection: Axis.horizontal,
-        padding: const EdgeInsets.symmetric(horizontal: 8),
-        children: [
-          for (final action in actions)
-            IconButton(
-              tooltip: widget.labelOf(padAppActionLabel(action)),
-              visualDensity: VisualDensity.compact,
-              onPressed: () {
-                Navigator.of(context).pop();
-                widget.onQuick!(action);
-              },
-              icon: Icon(padIconData(padAppActionIcon(action)), size: 22),
-            ),
-        ],
+  List<Widget> _quickSections() {
+    return [
+      if (widget.recent.isNotEmpty)
+        ..._quickSection('Recently used', widget.recent),
+      for (final group in _groups.entries)
+        ..._quickSection(group.key, group.value),
+    ];
+  }
+
+  List<Widget> _quickSection(String title, List<PadAppAction> actions) {
+    return [
+      Padding(
+        padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+        child: Text(widget.labelOf(title),
+            style: const TextStyle(fontWeight: FontWeight.w700)),
       ),
+      Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 4),
+        child: Wrap(
+          children: [for (final action in actions) _quickButton(action)],
+        ),
+      ),
+    ];
+  }
+
+  Widget _quickButton(PadAppAction action) {
+    final label = widget.labelOf(padAppActionLabel(action));
+    return Builder(
+      builder: (ctx) => GestureDetector(
+        onTap: () {
+          Navigator.of(context).pop();
+          widget.onQuick!(action);
+        },
+        onLongPress: () => _showQuickLabel(ctx, label),
+        child: SizedBox(
+          width: 40,
+          height: 40,
+          child: Icon(padIconData(padAppActionIcon(action)), size: 22),
+        ),
+      ),
+    );
+  }
+
+  void _showQuickLabel(BuildContext ctx, String label) {
+    final box = ctx.findRenderObject() as RenderBox?;
+    final overlay = Overlay.of(ctx).context.findRenderObject() as RenderBox?;
+    if (box == null || overlay == null) return;
+    final origin = box.localToGlobal(Offset.zero);
+    showMenu<void>(
+      context: ctx,
+      position: RelativeRect.fromRect(
+        origin & box.size,
+        Offset.zero & overlay.size,
+      ),
+      items: [
+        PopupMenuItem<void>(enabled: false, child: Text(label)),
+      ],
     );
   }
 

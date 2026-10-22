@@ -104,6 +104,40 @@ void main() {
     expect(card.center.dy, closeTo(384, 120));
   });
 
+  testWidgets('quick actions are grouped and a long press shows the name',
+      (tester) async {
+    await tester.binding.setSurfaceSize(const Size(1024, 768));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(MaterialApp(
+      home: Scaffold(
+        body: ControlPadOverlay(
+          persist: false,
+          strings: (s) => s,
+          initialRecent: const ['keyboard'],
+          initialButtons: [
+            PadButton.appAction(PadAppAction.menu, x: 0.9, y: 0.2),
+          ],
+        ),
+      ),
+    ));
+    await tester.pump();
+
+    await tester.tap(find.byIcon(Icons.tune));
+    await tester.pump();
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+
+    expect(find.text('Recently used'), findsOneWidget);
+    expect(find.text('Canvas'), findsWidgets);
+    expect(find.text('Input'), findsOneWidget);
+    expect(find.text('Session'), findsOneWidget);
+
+    await tester.longPress(find.byIcon(Icons.keyboard).first);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(find.text('Keyboard'), findsOneWidget);
+  });
+
   testWidgets('a quick action runs and does not add a button', (tester) async {
     await tester.binding.setSurfaceSize(const Size(1024, 768));
     addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -146,7 +180,11 @@ void main() {
     await tester.longPress(find.byIcon(Icons.tune));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 300));
+    expect(find.text('Menu'), findsWidgets);
     expect(find.text('Delete'), findsNothing);
+    await tester.tapAt(const Offset(8, 8));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 200));
 
     await tester.longPress(find.byIcon(Icons.keyboard_voice));
     await tester.pump();

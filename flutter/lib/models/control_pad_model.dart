@@ -341,7 +341,14 @@ class PadConfig {
   final int version;
   final List<PadButton> buttons;
 
-  const PadConfig({this.version = kControlPadVersion, required this.buttons});
+  /// Most recently used app actions, newest first. At most ten.
+  final List<String> recent;
+
+  const PadConfig({
+    this.version = kControlPadVersion,
+    required this.buttons,
+    this.recent = const [],
+  });
 
   /// Menu stays so shortcuts can be edited. The other two match the
   /// actions people used the voice button and the keyboard key for.
@@ -363,6 +370,7 @@ class PadConfig {
         PadButton.appAction(PadAppAction.toggleTouchMode, x: 0.92, y: 0.36),
         ...buttons,
       ],
+      recent: recent,
     );
   }
 
@@ -374,12 +382,14 @@ class PadConfig {
         PadButton.appAction(PadAppAction.menu, x: 0.92, y: 0.50),
         ...buttons,
       ],
+      recent: recent,
     );
   }
 
   Map<String, dynamic> toJson() => {
         'version': version,
         'buttons': buttons.map((b) => b.toJson()).toList(),
+        if (recent.isNotEmpty) 'recent': recent,
       };
 
   /// Returns null when [json] is not a usable config.
@@ -392,7 +402,22 @@ class PadConfig {
           .map(PadButton.tryFromJson)
           .whereType<PadButton>()
           .toList(),
+      recent: _recentFromJson(json['recent']),
     );
+  }
+
+  static List<String> _recentFromJson(Object? raw) {
+    if (raw is! List) return const [];
+    final out = <String>[];
+    for (final item in raw) {
+      if (item is! String) continue;
+      if (item == PadAppAction.menu.name) continue;
+      if (!PadAppAction.values.any((a) => a.name == item)) continue;
+      if (out.contains(item)) continue;
+      out.add(item);
+      if (out.length == 10) break;
+    }
+    return out;
   }
 
   String encode() => jsonEncode(toJson());
