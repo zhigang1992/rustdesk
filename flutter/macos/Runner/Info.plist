@@ -45,7 +45,11 @@
 	<string>Record the sound from microphone for the purpose of the remote desktop.</string>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
-    <key>LSUIElement</key>
+	<key>LSUIElement</key>
     <string>1</string>
+	<key>SUFeedURL</key>
+	<string>https://github.com/zhigang1992/rustdesk/releases/latest/download/appcast.xml</string>
+	<key>SUPublicEDKey</key>
+	<string>IUfanUX8anc1xDsUbveMNqDcA1PZiFASxl2CqhJv/2c=</string>
 </dict>
 </plist>

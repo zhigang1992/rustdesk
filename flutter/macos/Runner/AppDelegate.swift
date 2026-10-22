@@ -1,9 +1,15 @@
 import Cocoa
 import FlutterMacOS
+import Sparkle
 
 @main
 class AppDelegate: FlutterAppDelegate {
-    var launched = false;
+    var launched = false
+    private let updaterController = SPUStandardUpdaterController(
+        startingUpdater: true,
+        updaterDelegate: nil,
+        userDriverDelegate: nil
+    )
   override func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
       dummy_method_to_enforce_bundling()
     // https://github.com/leanflutter/window_manager/issues/214

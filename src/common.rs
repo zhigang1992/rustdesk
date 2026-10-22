@@ -20,7 +20,7 @@ use hbb_common::{
     config::{self, use_ws, Config, LocalConfig, CONNECT_TIMEOUT, READ_TIMEOUT, RENDEZVOUS_PORT},
     futures::future::join_all,
     futures_util::future::poll_fn,
-    get_version_number, log,
+    log,
     protobuf::{Enum, Message as _},
     rendezvous_proto::*,
     socket_client,
@@ -1020,8 +1020,17 @@ pub fn check_software_update() {
     }
 }
 
+// macOS builds of this fork update through Sparkle. The stock endpoint
+// would notify about upstream RustDesk releases.
+#[cfg(target_os = "macos")]
+#[tokio::main(flavor = "current_thread")]
+pub async fn do_check_software_update() -> hbb_common::ResultType<()> {
+    Ok(())
+}
+
 // No need to check `danger_accept_invalid_cert` for now.
 // Because the url is always `https://api.rustdesk.com/version/latest`.
+#[cfg(not(target_os = "macos"))]
 #[tokio::main(flavor = "current_thread")]
 pub async fn do_check_software_update() -> hbb_common::ResultType<()> {
     let (request, url) =
@@ -1054,7 +1063,9 @@ pub async fn do_check_software_update() -> hbb_common::ResultType<()> {
     let response_url = resp.url;
     let latest_release_version = response_url.rsplit('/').next().unwrap_or_default();
 
-    if get_version_number(&latest_release_version) > get_version_number(crate::VERSION) {
+    if hbb_common::get_version_number(&latest_release_version)
+        > hbb_common::get_version_number(crate::VERSION)
+    {
         #[cfg(feature = "flutter")]
         {
             let mut m = HashMap::new();
