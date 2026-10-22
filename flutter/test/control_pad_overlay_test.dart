@@ -60,6 +60,7 @@ void main() {
 
     await tester.tap(find.byIcon(Icons.tune));
     await tester.pump();
+    await tester.pump();
     await tester.pump(const Duration(milliseconds: 400));
 
     expect(find.text('Send text as keystrokes'), findsOneWidget);
@@ -71,6 +72,92 @@ void main() {
     expect(find.text('Action'), findsOneWidget);
     expect(find.text('Key'), findsOneWidget);
     expect(pressed?.appAction, PadAppAction.sendText);
+  });
+
+  testWidgets('a large screen opens the editor as a centered dialog',
+      (tester) async {
+    await tester.binding.setSurfaceSize(const Size(1024, 768));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(_host(
+      [
+        PadButton.appAction(PadAppAction.menu, x: 0.9, y: 0.2),
+      ],
+      (_, __) {},
+    ));
+    await tester.pump();
+
+    await tester.tap(find.byIcon(Icons.tune));
+    await tester.pump();
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+
+    expect(find.byType(Dialog), findsOneWidget);
+    expect(find.text('Add'), findsOneWidget);
+    final card = tester.getRect(find
+        .descendant(
+          of: find.byType(Dialog),
+          matching: find.byType(Material),
+        )
+        .first);
+    expect(card.width, lessThanOrEqualTo(520));
+    expect(card.center.dx, closeTo(512, 40));
+    expect(card.center.dy, closeTo(384, 120));
+  });
+
+  testWidgets('a quick action runs and does not add a button', (tester) async {
+    await tester.binding.setSurfaceSize(const Size(1024, 768));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    PadButton? pressed;
+    await tester.pumpWidget(_host(
+      [
+        PadButton.appAction(PadAppAction.menu, x: 0.9, y: 0.2),
+      ],
+      (b, _) => pressed = b,
+    ));
+    await tester.pump();
+
+    await tester.tap(find.byIcon(Icons.tune));
+    await tester.pump();
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+
+    await tester.tap(find.byIcon(Icons.fit_screen));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+
+    expect(pressed?.appAction, PadAppAction.resetCanvas);
+    expect(find.byType(Dialog), findsNothing);
+    expect(find.byIcon(Icons.tune), findsOneWidget);
+  });
+
+  testWidgets('a long press offers delete, except on the menu button',
+      (tester) async {
+    await tester.binding.setSurfaceSize(const Size(400, 800));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(_host(
+      [
+        PadButton.appAction(PadAppAction.sendText, x: 0.5, y: 0.5),
+        PadButton.appAction(PadAppAction.menu, x: 0.9, y: 0.2),
+      ],
+      (_, __) {},
+    ));
+    await tester.pump();
+
+    await tester.longPress(find.byIcon(Icons.tune));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(find.text('Delete'), findsNothing);
+
+    await tester.longPress(find.byIcon(Icons.keyboard_voice));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(find.text('Delete'), findsOneWidget);
+
+    await tester.tap(find.text('Delete'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(find.byIcon(Icons.keyboard_voice), findsNothing);
+    expect(find.byIcon(Icons.tune), findsOneWidget);
   });
 
   testWidgets('a toggle button shows its on icon while the setting is on',

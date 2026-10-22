@@ -8,6 +8,7 @@ enum PadAppAction {
   keyboard,
   toggleTwoFinger,
   gestureHelp,
+  toggleTouchMode,
   chat,
   displays,
   disconnect,
@@ -35,7 +36,7 @@ enum PadEdge { left, right, top, bottom }
 
 enum TwoFingerMode { canvas, rightDrag }
 
-const int kControlPadVersion = 3;
+const int kControlPadVersion = 4;
 
 T enumByName<T extends Enum>(List<T> values, Object? name, T fallback) {
   for (final v in values) {
@@ -202,6 +203,8 @@ String padAppActionLabel(PadAppAction a) {
     case PadAppAction.toggleTwoFinger:
       return 'Two-finger mode';
     case PadAppAction.gestureHelp:
+      return 'Gesture help';
+    case PadAppAction.toggleTouchMode:
       return 'Touch mode';
     case PadAppAction.chat:
       return 'Text chat';
@@ -245,6 +248,7 @@ String padAppActionLabel(PadAppAction a) {
 bool padAppActionIsToggle(PadAppAction a) {
   switch (a) {
     case PadAppAction.toggleTwoFinger:
+    case PadAppAction.toggleTouchMode:
     case PadAppAction.blockInput:
     case PadAppAction.recording:
     case PadAppAction.showRemoteCursor:
@@ -269,6 +273,8 @@ String padAppActionIcon(PadAppAction a) {
       return 'pinch';
     case PadAppAction.gestureHelp:
       return 'gesture';
+    case PadAppAction.toggleTouchMode:
+      return 'mouse';
     case PadAppAction.chat:
       return 'message';
     case PadAppAction.displays:
@@ -312,6 +318,8 @@ String? padAppActionIconOn(PadAppAction a) {
   switch (a) {
     case PadAppAction.toggleTwoFinger:
       return 'mouse';
+    case PadAppAction.toggleTouchMode:
+      return 'touch_app';
     case PadAppAction.blockInput:
       return 'front_hand';
     case PadAppAction.recording:
@@ -338,10 +346,25 @@ class PadConfig {
   /// Menu stays so shortcuts can be edited. The other two match the
   /// actions people used the voice button and the keyboard key for.
   factory PadConfig.defaults() => PadConfig(buttons: [
+        PadButton.appAction(PadAppAction.toggleTouchMode, x: 0.92, y: 0.36),
         PadButton.appAction(PadAppAction.menu, x: 0.92, y: 0.50),
         PadButton.appAction(PadAppAction.sendText, x: 0.92, y: 0.64),
         PadButton.appAction(PadAppAction.keyboard, x: 0.92, y: 0.78),
       ]);
+
+  /// v3 pads predate the direct mouse/touch switch. Add it once.
+  PadConfig withTouchToggle() {
+    if (buttons.any((b) => b.appAction == PadAppAction.toggleTouchMode)) {
+      return this;
+    }
+    return PadConfig(
+      version: kControlPadVersion,
+      buttons: [
+        PadButton.appAction(PadAppAction.toggleTouchMode, x: 0.92, y: 0.36),
+        ...buttons,
+      ],
+    );
+  }
 
   PadConfig withMenu() {
     if (buttons.any((b) => b.appAction == PadAppAction.menu)) return this;

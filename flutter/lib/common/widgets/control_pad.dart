@@ -1,8 +1,33 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
-import 'package:flutter_hbb/common.dart';
+import 'package:flutter_hbb/common.dart' hide Dialog;
 import 'package:flutter_hbb/common/widgets/control_pad_editor.dart';
 import 'package:flutter_hbb/models/control_pad_model.dart';
 import 'package:flutter_hbb/models/control_pad_store.dart';
+import 'package:path_provider/path_provider.dart';
+
+File? _padLogFile;
+Future<void>? _padLogReady;
+
+void _padLog(String message) {
+  final line = '${DateTime.now().toIso8601String()} $message';
+  debugPrint('PADPANEL $line');
+  _padLogReady ??= () async {
+    try {
+      final dir = await getApplicationDocumentsDirectory();
+      _padLogFile = File('${dir.path}/pad_panel.log');
+      debugPrint('PADPANEL file ${_padLogFile!.path}');
+    } catch (e) {
+      debugPrint('PADPANEL file unavailable $e');
+    }
+  }();
+  _padLogReady!.then((_) {
+    try {
+      _padLogFile?.writeAsStringSync('$line\n', mode: FileMode.append);
+    } catch (_) {}
+  });
+}
 
 const double _kPadSize = 56;
 const double _kDragSlop = 12;
@@ -48,6 +73,8 @@ class _ControlPadOverlayState extends State<ControlPadOverlay> {
   Offset _panTotal = Offset.zero;
   bool _moved = false;
   Future<void> _saveChain = Future<void>.value();
+  bool _panelOpen = false;
+  DateTime? _panelOpenedAt;
 
   @override
   void initState() {
@@ -79,34 +106,142 @@ class _ControlPadOverlayState extends State<ControlPadOverlay> {
     _save();
   }
 
-  Future<void> _openEditor() async {
-    await showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      builder: (ctx) => PadEditor(
-        buttons: List<PadButton>.from(_buttons),
-        labelOf: _t,
-        onAdd: _place,
-        onRemove: (b) {
-          if (b.appAction == PadAppAction.menu) return;
-          setState(() => _buttons.removeWhere((e) => e.id == b.id));
-          _save();
-        },
-        onUpdate: (b) {
-          setState(() {
-            final i = _buttons.indexWhere((e) => e.id == b.id);
-            if (i < 0) return;
-            _buttons[i] = b.copyWith(x: _buttons[i].x, y: _buttons[i].y);
-          });
-          _save();
-        },
-      ),
+  Widget _editor() {
+    return PadEditor(
+      buttons: List<PadButton>.from(_buttons),
+      labelOf: _t,
+      onAdd: _place,
+      onRemove: (b) {
+        if (b.appAction == PadAppAction.menu) return;
+        setState(() => _buttons.removeWhere((e) => e.id == b.id));
+        _save();
+      },
+      onUpdate: (b) {
+        setState(() {
+          final i = _buttons.indexWhere((e) => e.id == b.id);
+          if (i < 0) return;
+          _buttons[i] = b.copyWith(x: _buttons[i].x, y: _buttons[i].y);
+        });
+        _save();
+      },
+      onQuick: (action) {
+        widget.onPress?.call(PadButton.appAction(action), true);
+      },
     );
+  }
+
+  bool get _largeScreen => MediaQuery.sizeOf(context).shortestSide >= 600;
+
+  void _dismissPanel(BuildContext ctx) {
+    final opened = _panelOpenedAt;
+    final age = opened == null
+        ? -1
+        : DateTime.now().difference(opened).inMilliseconds;
+    // The tap that opens the panel can arrive again on the scrim a moment
+    // later and close it. Ignore that. A real tap outside still closes it.
+    if (age >= 0 && age < 800) {
+      _padLog('scrim ignored age=$age');
+      return;
+    }
+    _padLog('scrim dismiss age=$age');
+    Navigator.of(ctx).pop();
+  }
+
+  Future<void> _openEditor() async {
+    final mq = MediaQuery.of(context);
+    _panelOpen = true;
+    _panelOpenedAt = DateTime.now();
+    _padLog(
+        'open large=$_largeScreen size=${mq.size} insets=${mq.viewInsets} padding=${mq.padding}');
+    try {
+      if (_largeScreen) {
+        final height = mq.size.height;
+        await showGeneralDialog<void>(
+          context: context,
+          barrierDismissible: false,
+          barrierLabel:
+              MaterialLocalizations.of(context).modalBarrierDismissLabel,
+          barrierColor: Colors.black54,
+          pageBuilder: (ctx, _, __) => _PanelTrace(
+            child: Stack(
+              children: [
+                Positioned.fill(
+                  child: GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onTap: () => _dismissPanel(ctx),
+                  ),
+                ),
+                Center(
+                  child: Dialog(
+                    clipBehavior: Clip.antiAlias,
+                    child: ConstrainedBox(
+                      constraints: BoxConstraints(
+                        maxWidth: 520,
+                        maxHeight: height * 0.7,
+                      ),
+                      child: _editor(),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+        return;
+      }
+      await showModalBottomSheet<void>(
+        context: context,
+        isScrollControlled: true,
+        // A size change while the sheet is opening was being read as a drag
+        // and closing it.
+        enableDrag: false,
+        builder: (ctx) => _PanelTrace(child: _editor()),
+      );
+    } finally {
+      _panelOpen = false;
+      _padLog('closed mounted=$mounted');
+    }
+  }
+
+  @override
+  void deactivate() {
+    if (_panelOpen) {
+      _padLog('overlay deactivate while panel open\n${StackTrace.current}');
+    }
+    super.deactivate();
+  }
+
+  void _delete(PadButton b) {
+    if (b.appAction == PadAppAction.menu) return;
+    setState(() => _buttons.removeWhere((e) => e.id == b.id));
+    _save();
+  }
+
+  Future<void> _showButtonMenu(PadButton b, Offset global) async {
+    if (b.appAction == PadAppAction.menu) return;
+    final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
+    final position = RelativeRect.fromRect(
+      Rect.fromLTWH(global.dx, global.dy, 0, 0),
+      Offset.zero & overlay.size,
+    );
+    final value = await showMenu<String>(
+      context: context,
+      position: position,
+      items: [
+        PopupMenuItem(value: 'delete', child: Text(_t('Delete'))),
+      ],
+    );
+    if (!mounted || value != 'delete') return;
+    _delete(b);
   }
 
   void _activate(PadButton b) {
     if (b.appAction == PadAppAction.menu) {
-      _openEditor();
+      // The tap that opens the sheet can also land on the new barrier and
+      // dismiss it. Wait until that gesture has finished.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _openEditor();
+      });
       return;
     }
     widget.onPress?.call(b, true);
@@ -149,24 +284,25 @@ class _ControlPadOverlayState extends State<ControlPadOverlay> {
         },
         onPanEnd: (_) => _endDrag(b, size),
         onPanCancel: () => _endDrag(b, size),
-        child: Tooltip(
-          message: _faceLabel(b),
-          child: AnimatedContainer(
-            duration: const Duration(milliseconds: 80),
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              color: MyTheme.accent.withOpacity(dragging ? 1 : 0.92),
-              boxShadow: const [
-                BoxShadow(
-                  color: Color(0x47000000),
-                  blurRadius: 6,
-                  offset: Offset(0, 3),
-                ),
-              ],
-            ),
-            alignment: Alignment.center,
-            child: _face(b),
+        onLongPressStart: (d) {
+          if (_moved) return;
+          _showButtonMenu(b, d.globalPosition);
+        },
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 80),
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            color: MyTheme.accent.withOpacity(dragging ? 1 : 0.92),
+            boxShadow: const [
+              BoxShadow(
+                color: Color(0x47000000),
+                blurRadius: 6,
+                offset: Offset(0, 3),
+              ),
+            ],
           ),
+          alignment: Alignment.center,
+          child: _face(b),
         ),
       ),
     );
@@ -241,5 +377,38 @@ class _ControlPadOverlayState extends State<ControlPadOverlay> {
         children: [for (final b in _buttons) _chip(b, size)],
       );
     });
+  }
+}
+
+class _PanelTrace extends StatefulWidget {
+  final Widget child;
+
+  const _PanelTrace({required this.child});
+
+  @override
+  State<_PanelTrace> createState() => _PanelTraceState();
+}
+
+class _PanelTraceState extends State<_PanelTrace> {
+  @override
+  void initState() {
+    super.initState();
+    _padLog('panel mount');
+  }
+
+  @override
+  void dispose() {
+    _padLog('panel dispose\n${StackTrace.current}');
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return PopScope(
+      onPopInvokedWithResult: (didPop, result) {
+        _padLog('panel pop didPop=$didPop result=$result\n${StackTrace.current}');
+      },
+      child: widget.child,
+    );
   }
 }

@@ -62,11 +62,6 @@ Offset _lastSpecialHoldDragFocalPoint = Offset.zero;
 // Games that poll input per frame read a cursor jump and a button press in the
 // same frame as a drag from the old position, so touch mode presses after this.
 const _kPressAfterMoveDelay = Duration(milliseconds: 60);
-// After Flutter already promoted a touch to a pan (~kTouchSlop), further
-// movement under this is still treated as a tap with finger/trackpad jitter.
-const _kTouchModeDragThreshold = 20.0;
-// Held without exceeding the drag threshold: commit to left-button drag.
-const _kTouchModeDragHoldDelay = Duration(milliseconds: 120);
 
 bool isTwoFingerRightDragMode() => getTwoFingerMode() == TwoFingerMode.rightDrag;
 
@@ -111,10 +106,8 @@ class _RawTouchGestureDetectorRegionState
   int _touchModePressGen = 0;
   bool _touchModePressPending = false;
   Offset _touchModePendingPosition = Offset.zero;
-  // Absolute touch-mode pan: classify tap-vs-drag before sending left-down.
-  bool _touchModeDragCandidate = false;
+  // True after the delayed left-down for an absolute touch-mode pan.
   bool _touchModeLeftPressed = false;
-  Offset _touchModeDragOrigin = Offset.zero;
   // Touch clicks await a cursor move before the button event. A later tap can
   // otherwise move the cursor first, and the host presses at the old point.
   Future<void> _touchSendChain = Future<void>.value();
@@ -440,7 +433,7 @@ class _RawTouchGestureDetectorRegionState
         if (isMobile &&
             !ffiModel.isPeerMobile &&
             !inputModel.relativeMouseMode.value) {
-          await _beginTouchModeDragCandidate(
+          await _touchModePressAfterMove(
               recentLongPressDown ? longPressPos : local, local);
           return;
         }
@@ -463,37 +456,6 @@ class _RawTouchGestureDetectorRegionState
     });
   }
 
-  _beginTouchModeDragCandidate(Offset origin, Offset current) async {
-    _touchModeDragCandidate = true;
-    _touchModeLeftPressed = false;
-    _touchModeDragOrigin = origin;
-    _touchModePendingPosition = current;
-    _touchModePressPending = false;
-    final gen = ++_touchModePressGen;
-    await ffi.cursorModel.move(origin.dx, origin.dy);
-    if (gen != _touchModePressGen || !_touchModeDragCandidate) return;
-    // Already past the tap-jitter window (e.g. long-press then move).
-    if ((current - origin).distance >= _kTouchModeDragThreshold) {
-      await _commitTouchModeDrag();
-      return;
-    }
-    // Hold without further movement still becomes a drag (click-and-hold).
-    Future.delayed(_kTouchModeDragHoldDelay, () {
-      _sendTouchInOrder(() async {
-        if (gen != _touchModePressGen || !_touchModeDragCandidate) return;
-        if (_touchModeLeftPressed || _touchModePressPending) return;
-        await _commitTouchModeDrag();
-      });
-    });
-  }
-
-  _commitTouchModeDrag() async {
-    if (!_touchModeDragCandidate || _touchModeLeftPressed) return;
-    _touchModeDragCandidate = false;
-    await _touchModePressAfterMove(
-        _touchModeDragOrigin, _touchModePendingPosition);
-  }
-
   _touchModePressAfterMove(Offset start, Offset current) async {
     final gen = ++_touchModePressGen;
     _touchModePressPending = true;
@@ -508,20 +470,10 @@ class _RawTouchGestureDetectorRegionState
         .move(_touchModePendingPosition.dx, _touchModePendingPosition.dy);
   }
 
-  _finishTouchModeTap(Offset origin) async {
-    _touchModeDragCandidate = false;
+  _resetTouchModeDragState() {
     _touchModePressPending = false;
     _touchModeLeftPressed = false;
     ++_touchModePressGen;
-    await ffi.cursorModel.move(origin.dx, origin.dy);
-    await inputModel.tap(MouseButtons.left);
-  }
-
-  _resetTouchModeDragState({bool bumpGen = true}) {
-    _touchModeDragCandidate = false;
-    _touchModePressPending = false;
-    _touchModeLeftPressed = false;
-    if (bumpGen) ++_touchModePressGen;
   }
 
   onOneFingerPanUpdate(DragUpdateDetails d) async {
@@ -536,19 +488,11 @@ class _RawTouchGestureDetectorRegionState
     }
     final pos = d.localPosition;
     final delta = d.delta;
-    if (_touchModeDragCandidate || _touchModePressPending) {
+    if (_touchModePressPending) {
       _touchModePendingPosition = pos;
     }
     await _sendTouchInOrder(() async {
       if (handleTouch && !_touchModePanStarted) {
-        return;
-      }
-      if (_touchModeDragCandidate) {
-        _touchModePendingPosition = pos;
-        if ((pos - _touchModeDragOrigin).distance >=
-            _kTouchModeDragThreshold) {
-          await _commitTouchModeDrag();
-        }
         return;
       }
       if (_touchModePressPending) {
@@ -570,32 +514,23 @@ class _RawTouchGestureDetectorRegionState
       _resetTouchModeDragState();
       return;
     }
-    final asTap = _touchModeDragCandidate ||
-        (_touchModePressPending && !_touchModeLeftPressed);
-    final origin = _touchModeDragOrigin;
+    // Do not bump the press generation here. The down is still in the send
+    // chain during the settle delay, and this up has to follow it.
     final sendUp = !inputModel.relativeMouseMode.value &&
-        (_touchModeLeftPressed || !_isMobileAbsoluteTouchDragPath());
+        (_touchModeLeftPressed ||
+            _touchModePressPending ||
+            !_isMobileAbsoluteTouchDragPath());
     final clearCoords = isDesktop || isWebDesktop;
-    if (handleTouch) {
-      _resetTouchModeDragState();
-    }
     await _sendTouchInOrder(() async {
       if (clearCoords) {
         ffi.cursorModel.clearRemoteWindowCoords();
       }
-      if (handleTouch) {
-        if (asTap) {
-          // Pan won over tap on a tiny move; still a click for the host.
-          await _finishTouchModeTap(origin);
-          return;
-        }
-        // Relative mode skips up (no down on pan start). Absolute mobile only
-        // ups if we committed a drag; other touch paths always pressed on start.
-        if (sendUp) {
-          await inputModel.sendMouse('up', MouseButtons.left);
-        }
+      if (handleTouch && sendUp) {
+        await inputModel.sendMouse('up', MouseButtons.left);
       }
     });
+    _touchModeLeftPressed = false;
+    _touchModePressPending = false;
   }
 
   bool _isMobileAbsoluteTouchDragPath() =>

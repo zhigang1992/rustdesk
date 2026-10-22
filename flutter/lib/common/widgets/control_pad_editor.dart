@@ -7,6 +7,7 @@ const List<String> kPadIconNames = [
   'keyboard',
   'pinch',
   'mouse',
+  'touch_app',
   'gesture',
   'message',
   'tv',
@@ -43,6 +44,8 @@ IconData padIconData(String name) {
       return Icons.pinch;
     case 'mouse':
       return Icons.mouse;
+    case 'touch_app':
+      return Icons.touch_app;
     case 'gesture':
       return Icons.gesture;
     case 'message':
@@ -100,6 +103,7 @@ class PadEditor extends StatefulWidget {
   final void Function(PadButton button) onAdd;
   final void Function(PadButton button) onRemove;
   final void Function(PadButton button) onUpdate;
+  final void Function(PadAppAction action)? onQuick;
 
   const PadEditor({
     Key? key,
@@ -108,6 +112,7 @@ class PadEditor extends StatefulWidget {
     required this.onAdd,
     required this.onRemove,
     required this.onUpdate,
+    this.onQuick,
   }) : super(key: key);
 
   @override
@@ -138,6 +143,7 @@ class _PadEditorState extends State<PadEditor> {
       PadAppAction.sendText,
       PadAppAction.sendClipboard,
       PadAppAction.keyboard,
+      PadAppAction.toggleTouchMode,
       PadAppAction.ctrlAltDel,
       PadAppAction.lock,
       PadAppAction.osPassword,
@@ -293,7 +299,31 @@ class _PadEditorState extends State<PadEditor> {
           title: Text(widget.labelOf('Add')),
           onTap: () => setState(() => _step = _Step.kind),
         ),
+        if (widget.onQuick != null) _quickActions(),
       ],
+    );
+  }
+
+  Widget _quickActions() {
+    final actions = [for (final group in _groups.values) ...group];
+    return SizedBox(
+      height: 48,
+      child: ListView(
+        scrollDirection: Axis.horizontal,
+        padding: const EdgeInsets.symmetric(horizontal: 8),
+        children: [
+          for (final action in actions)
+            IconButton(
+              tooltip: widget.labelOf(padAppActionLabel(action)),
+              visualDensity: VisualDensity.compact,
+              onPressed: () {
+                Navigator.of(context).pop();
+                widget.onQuick!(action);
+              },
+              icon: Icon(padIconData(padAppActionIcon(action)), size: 22),
+            ),
+        ],
+      ),
     );
   }
 
