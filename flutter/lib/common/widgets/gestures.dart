@@ -10,6 +10,12 @@ enum GestureState {
   threeFingerVerticalDrag
 }
 
+/// Distance a finger must move before a one-finger touch becomes a pan.
+///
+/// [DeviceGestureSettings.panSlop] is twice [DeviceGestureSettings.touchSlop].
+/// The default pan slop is 36.
+const double kRemotePanSlop = 20;
+
 class CustomTouchGestureRecognizer extends ScaleGestureRecognizer {
   CustomTouchGestureRecognizer({
     Object? debugOwner,
@@ -18,6 +24,7 @@ class CustomTouchGestureRecognizer extends ScaleGestureRecognizer {
           debugOwner: debugOwner,
           supportedDevices: supportedDevices,
         ) {
+    gestureSettings = const DeviceGestureSettings(touchSlop: kRemotePanSlop / 2);
     _init();
   }
 

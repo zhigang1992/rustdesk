@@ -5,11 +5,18 @@ import 'package:flutter_hbb/models/platform_model.dart';
 PadConfig loadControlPad() {
   final decoded =
       PadConfig.tryDecode(bind.getLocalFlutterOption(k: kOptionControlPad));
-  // v1 was edge-snapped text chips; reset to the FAB stack defaults on bump.
-  if (decoded == null || decoded.version < kControlPadVersion) {
+  // v1 was edge-snapped text chips; reset those to the FAB stack.
+  // v3 gains the mouse/touch toggle without moving the buttons already placed.
+  if (decoded == null || decoded.version < 3) {
     return PadConfig.defaults();
   }
-  return decoded.withMenu();
+  final cfg = decoded.withMenu();
+  if (decoded.version < kControlPadVersion) {
+    final next = cfg.withTouchToggle();
+    if (next.version >= kControlPadVersion) return next;
+    return PadConfig(version: kControlPadVersion, buttons: next.buttons);
+  }
+  return cfg;
 }
 
 Future<void> saveControlPad(PadConfig config) =>
