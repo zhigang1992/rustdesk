@@ -342,13 +342,22 @@ class MainFlutterWindow: NSWindow {
     }
 }
 
-/// Host-side single-line field so dictation / IME run on macOS, not the remote.
-private class KeystrokeInputPanel: NSObject, NSWindowDelegate, NSTextFieldDelegate {
+/// Host-side field so dictation / IME run on macOS, not the remote.
+/// The field grows with wrapped text, up to ten lines, then scrolls.
+private class KeystrokeInputPanel: NSObject, NSWindowDelegate, NSTextViewDelegate {
     static var current: KeystrokeInputPanel?
 
     private let panel: NSPanel
-    private let textField: NSTextField
+    private let scrollView: NSScrollView
+    private let textView: NSTextView
+    private let hintField: NSTextField?
     private let appendEnterCheckbox: NSButton
+    private let minFieldHeight: CGFloat
+    private let maxFieldHeight: CGFloat
+    private let fieldY: CGFloat
+    private let gap: CGFloat = 8
+    private let topPad: CGFloat = 16
+    private let hintHeight: CGFloat
     private var completion: (([String: Any]?) -> Void)?
     private var eventMonitor: Any?
     private var finished = false
@@ -366,18 +375,23 @@ private class KeystrokeInputPanel: NSObject, NSWindowDelegate, NSTextFieldDelega
 
         let width: CGFloat = 480
         let buttonHeight: CGFloat = 32
-        let fieldHeight: CGFloat = 24
         let checkboxHeight: CGFloat = 18
         let hintHeight: CGFloat = hint.isEmpty ? 0 : 32
         let topPad: CGFloat = 16
         let gap: CGFloat = 8
         let bottomPad: CGFloat = 16
-        // hint + field + checkbox + buttons, with gaps
-        let height = topPad
-            + hintHeight + (hint.isEmpty ? 0 : gap)
-            + fieldHeight + gap
-            + checkboxHeight + gap
-            + buttonHeight + bottomPad
+        let font = NSFont.systemFont(ofSize: 14)
+        let lineHeight = NSLayoutManager().defaultLineHeight(for: font)
+        let fieldPad: CGFloat = 8
+        let minFieldHeight = ceil(lineHeight + fieldPad)
+        let maxFieldHeight = ceil(lineHeight * 10 + fieldPad)
+        self.minFieldHeight = minFieldHeight
+        self.maxFieldHeight = maxFieldHeight
+        self.hintHeight = hintHeight
+        let fieldY = bottomPad + buttonHeight + gap + checkboxHeight + gap
+        self.fieldY = fieldY
+        let height = fieldY + minFieldHeight + (hint.isEmpty ? 0 : gap) + hintHeight + topPad
+
         panel = NSPanel(
             contentRect: NSRect(x: 0, y: 0, width: width, height: height),
             styleMask: [.titled, .closable],
@@ -394,36 +408,71 @@ private class KeystrokeInputPanel: NSObject, NSWindowDelegate, NSTextFieldDelega
         let content = NSView(frame: NSRect(x: 0, y: 0, width: width, height: height))
         panel.contentView = content
 
-        var y: CGFloat = height - topPad
-        if !hint.isEmpty {
-            y -= hintHeight
+        if hint.isEmpty {
+            hintField = nil
+        } else {
             let hintField = NSTextField(labelWithString: hint)
             hintField.font = NSFont.systemFont(ofSize: 12)
             hintField.textColor = .secondaryLabelColor
             hintField.lineBreakMode = .byWordWrapping
             hintField.maximumNumberOfLines = 2
-            hintField.frame = NSRect(x: 16, y: y, width: width - 32, height: hintHeight)
+            hintField.frame = NSRect(
+                x: 16,
+                y: fieldY + minFieldHeight + gap,
+                width: width - 32,
+                height: hintHeight
+            )
             content.addSubview(hintField)
-            y -= gap
+            self.hintField = hintField
         }
 
-        y -= fieldHeight
-        textField = NSTextField(frame: NSRect(x: 16, y: y, width: width - 32, height: fieldHeight))
-        textField.font = NSFont.systemFont(ofSize: 14)
-        textField.isEditable = true
-        textField.isSelectable = true
-        textField.isBordered = true
-        textField.bezelStyle = .squareBezel
-        content.addSubview(textField)
-        y -= gap
+        textView = NSTextView()
+        textView.font = font
+        textView.textColor = .textColor
+        textView.backgroundColor = .textBackgroundColor
+        textView.insertionPointColor = .textColor
+        textView.isRichText = false
+        textView.isEditable = true
+        textView.isSelectable = true
+        textView.allowsUndo = true
+        textView.isAutomaticQuoteSubstitutionEnabled = false
+        textView.isAutomaticDashSubstitutionEnabled = false
+        textView.isAutomaticDataDetectionEnabled = false
+        textView.isAutomaticLinkDetectionEnabled = false
+        textView.isAutomaticTextReplacementEnabled = false
+        textView.isAutomaticSpellingCorrectionEnabled = false
+        textView.isContinuousSpellCheckingEnabled = false
+        textView.isGrammarCheckingEnabled = false
+        textView.textContainerInset = NSSize(width: 2, height: 2)
+        textView.isVerticallyResizable = true
+        textView.isHorizontallyResizable = false
+        textView.textContainer?.widthTracksTextView = true
+        textView.textContainer?.heightTracksTextView = false
+        textView.minSize = NSSize(width: 0, height: minFieldHeight)
+        textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+        let fieldWidth = width - 32
+        textView.frame = NSRect(x: 0, y: 0, width: fieldWidth, height: minFieldHeight)
 
-        y -= checkboxHeight
+        scrollView = NSScrollView(frame: NSRect(x: 16, y: fieldY, width: fieldWidth, height: minFieldHeight))
+        scrollView.borderType = .bezelBorder
+        scrollView.hasVerticalScroller = true
+        scrollView.autohidesScrollers = true
+        scrollView.hasHorizontalScroller = false
+        scrollView.drawsBackground = true
+        scrollView.documentView = textView
+        content.addSubview(scrollView)
+
         appendEnterCheckbox = NSButton(
             checkboxWithTitle: appendEnterLabel,
             target: nil,
             action: nil
         )
-        appendEnterCheckbox.frame = NSRect(x: 16, y: y, width: width - 32, height: checkboxHeight)
+        appendEnterCheckbox.frame = NSRect(
+            x: 16,
+            y: bottomPad + buttonHeight + gap,
+            width: width - 32,
+            height: checkboxHeight
+        )
         appendEnterCheckbox.state = appendEnter ? .on : .off
         content.addSubview(appendEnterCheckbox)
 
@@ -450,7 +499,7 @@ private class KeystrokeInputPanel: NSObject, NSWindowDelegate, NSTextFieldDelega
 
         super.init()
 
-        textField.delegate = self
+        textView.delegate = self
         sendButton.target = self
         sendButton.action = #selector(send)
         cancelButton.target = self
@@ -504,10 +553,15 @@ private class KeystrokeInputPanel: NSObject, NSWindowDelegate, NSTextFieldDelega
         current = controller
         NSApp.activate(ignoringOtherApps: true)
         controller.panel.makeKeyAndOrderFront(nil)
-        controller.panel.makeFirstResponder(controller.textField)
+        controller.resizeField()
+        controller.panel.makeFirstResponder(controller.textView)
     }
 
-    func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+    func textDidChange(_ notification: Notification) {
+        resizeField()
+    }
+
+    func textView(_ textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
         if commandSelector == #selector(NSResponder.insertNewline(_:)) {
             send()
             return true
@@ -515,9 +569,43 @@ private class KeystrokeInputPanel: NSObject, NSWindowDelegate, NSTextFieldDelega
         return false
     }
 
+    /// Grow the panel with wrapped text. The bottom edge stays put.
+    private func resizeField() {
+        guard let container = textView.textContainer,
+              let layout = textView.layoutManager else { return }
+        let clipWidth = scrollView.contentSize.width
+        if clipWidth > 1 {
+            container.containerSize = NSSize(
+                width: max(clipWidth - textView.textContainerInset.width * 2, 1),
+                height: CGFloat.greatestFiniteMagnitude
+            )
+            textView.frame.size.width = clipWidth
+        }
+        layout.ensureLayout(for: container)
+        let used = layout.usedRect(for: container)
+        let contentHeight = ceil(used.height + textView.textContainerInset.height * 2)
+        let fieldHeight = min(max(contentHeight, minFieldHeight), maxFieldHeight)
+        let oldHeight = scrollView.frame.height
+        textView.frame.size.height = max(contentHeight, minFieldHeight)
+        guard abs(oldHeight - fieldHeight) >= 0.5 else {
+            textView.scrollRangeToVisible(textView.selectedRange())
+            return
+        }
+
+        scrollView.frame.size.height = fieldHeight
+        scrollView.frame.origin.y = fieldY
+        if hintHeight > 0 {
+            hintField?.frame.origin.y = scrollView.frame.maxY + gap
+        }
+        var frame = panel.frame
+        frame.size.height += fieldHeight - oldHeight
+        panel.setFrame(frame, display: true)
+        textView.scrollRangeToVisible(textView.selectedRange())
+    }
+
     @objc private func send() {
         finish([
-            "text": textField.stringValue,
+            "text": textView.string,
             "appendEnter": appendEnterCheckbox.state == .on,
         ])
     }
