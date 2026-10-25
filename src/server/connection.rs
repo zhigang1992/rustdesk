@@ -1,3 +1,6 @@
+#[path = "../remote_browser/host.rs"]
+mod remote_browser;
+
 #[cfg(target_os = "windows")]
 use super::login_failure_check::try_acquire_os_credential_login_gate;
 use super::login_failure_check::{
@@ -1802,6 +1805,10 @@ impl Connection {
         let Some(login_request::Union::PortForward(pf)) = self.lr.union.as_ref() else {
             return true;
         };
+        if let Some(token) = crate::remote_browser::token(&pf.host, pf.port) {
+            let token = token.to_owned();
+            return self.connect_remote_browser(pf.multiplex, token).await;
+        }
         if pf.multiplex {
             crate::port_forward_mux::cap_packet_size(&mut self.stream);
             // `inner.tx` is set for the connection's whole life; `None` here is

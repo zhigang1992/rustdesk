@@ -2836,6 +2836,8 @@ pub struct LoginConfigHandler {
     pub remember: bool,
     config: PeerConfig,
     pub port_forward: (String, i32),
+    #[cfg(target_os = "ios")]
+    pub(crate) browser: Option<Arc<crate::remote_browser::client::BrowserClient>>,
     /// This login's `multiplex`, filled with `port_forward` under the turn
     /// lock. `port_forward_mux` says whether a mapping probes for the tunnel;
     /// one the probe latched to the raw pipe logs in without asking, so an

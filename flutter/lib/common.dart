@@ -34,6 +34,8 @@ import 'mobile/pages/file_manager_page.dart';
 import 'mobile/pages/remote_page.dart';
 import 'mobile/pages/view_camera_page.dart';
 import 'mobile/pages/terminal_page.dart';
+import 'mobile/pages/remote_browser_page.dart';
+import 'models/remote_browser_link.dart';
 import 'desktop/pages/remote_page.dart' as desktop_remote;
 import 'desktop/pages/file_manager_page.dart' as desktop_file_manager;
 import 'desktop/pages/view_camera_page.dart' as desktop_view_camera;
@@ -2281,6 +2283,11 @@ bool handleUriLink({List<String>? cmdArgs, Uri? uri, String? uriString}) {
     return true;
   }
 
+  if (args.length == 4 && args[0] == '--browser' && args[2] == '--url') {
+    unawaited(openRemoteBrowser(args[1], url: args[3]));
+    return true;
+  }
+
   UriLinkType? type;
   String? id;
   String? password;
@@ -2389,6 +2396,13 @@ bool handleUriLink({List<String>? cmdArgs, Uri? uri, String? uriString}) {
 }
 
 List<String>? urlLinkToCmdArgs(Uri uri) {
+  if (uri.host == 'browser') {
+    final link = RemoteBrowserLink.parse(uri,
+        scheme: Uri.parse(bind.mainUriPrefixSync()).scheme);
+    return link == null
+        ? null
+        : ['--browser', link.peer, '--url', link.url.toString()];
+  }
   String? command;
   String? id;
   final options = [

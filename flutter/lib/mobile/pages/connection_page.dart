@@ -17,6 +17,7 @@ import '../../consts.dart';
 import '../../models/model.dart';
 import '../../models/platform_model.dart';
 import 'home_page.dart';
+import 'remote_browser_page.dart';
 
 /// Connection page for connecting to a remote peer.
 class ConnectionPage extends StatefulWidget implements PageShape {
@@ -45,6 +46,7 @@ class _ConnectionPageState extends State<ConnectionPage> {
   final TextEditingController _idEditingController = TextEditingController();
 
   final AllPeersLoader _allPeersLoader = AllPeersLoader();
+  bool _browserAvailable = false;
 
   StreamSubscription? _uniLinksSubscription;
 
@@ -63,6 +65,11 @@ class _ConnectionPageState extends State<ConnectionPage> {
   void initState() {
     super.initState();
     _allPeersLoader.init(setState);
+    if (isIOS) {
+      remoteBrowserAvailable().then((available) {
+        if (mounted) setState(() => _browserAvailable = available);
+      });
+    }
     _idFocusNode.addListener(onFocusChanged);
     if (_idController.text.isEmpty) {
       WidgetsBinding.instance.addPostFrameCallback((_) async {
@@ -87,6 +94,13 @@ class _ConnectionPageState extends State<ConnectionPage> {
           if (!bind.isCustomClient() && !isIOS)
             Obx(() => _buildUpdateUI(stateGlobal.updateUrl.value)),
           _buildRemoteIDTextField(),
+          if (_browserAvailable)
+            Obx(() => TextButton.icon(
+                onPressed: _idEmpty.value
+                    ? null
+                    : () => openRemoteBrowser(_idController.id),
+                icon: const Icon(Icons.public),
+                label: const Text('Open remote browser'))),
         ])),
         SliverFillRemaining(
           hasScrollBody: true,

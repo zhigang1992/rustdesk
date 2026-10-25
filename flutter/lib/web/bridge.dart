@@ -1960,6 +1960,7 @@ class RustdeskImpl {
       required String key,
       required String param,
       dynamic hint}) {
+    if (key == 'remote-browser-prepare') return null;
     throw UnimplementedError("sessionGetCommonSync");
   }
 

@@ -410,8 +410,10 @@ pub async fn run_channel<R, W>(
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub use tunnel::{Claim, Tunnel};
+#[cfg(target_os = "ios")]
+pub use tunnel::Tunnel;
 
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
+#[cfg(not(target_os = "android"))]
 mod tunnel {
     use super::*;
     use crate::client::Interface;
@@ -500,6 +502,19 @@ mod tunnel {
                 self.lifetime.subscribe(),
             ));
             handle
+        }
+
+        #[cfg(target_os = "ios")]
+        pub async fn ended(&self) {
+            let mut state = self.state.subscribe();
+            loop {
+                if !matches!(&*state.borrow(), TunnelState::Muxed(_)) {
+                    return;
+                }
+                if state.changed().await.is_err() {
+                    return;
+                }
+            }
         }
 
         pub fn set_legacy(&self) {

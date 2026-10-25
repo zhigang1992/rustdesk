@@ -9,6 +9,9 @@ import AVFoundation
     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
   ) -> Bool {
     GeneratedPluginRegistrant.register(with: self)
+    if let browserRegistrar = registrar(forPlugin: "RemoteBrowserPlugin") {
+      RemoteBrowserPlugin.register(with: browserRegistrar)
+    }
     do {
       // Mix remote audio with other apps while still respecting silent mode.
       try AVAudioSession.sharedInstance().setCategory(.ambient)

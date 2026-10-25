@@ -2984,6 +2984,13 @@ pub fn session_get_common(
     #[allow(unused_variables)] param: String,
 ) -> Option<String> {
     if let Some(s) = sessions::get_session_by_session_id(&session_id) {
+        #[cfg(target_os = "ios")]
+        if key == "remote-browser-prepare" {
+            return Some(match crate::remote_browser::client::prepare(&s) {
+                Ok(endpoint) => endpoint,
+                Err(error) => serde_json::json!({ "error": error.to_string() }).to_string(),
+            });
+        }
         let v = if key == "is_screenshot_supported" {
             s.is_screenshot_supported().to_string()
         } else {

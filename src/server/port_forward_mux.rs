@@ -35,6 +35,8 @@ pub struct PortForwardMux {
     channels: HashMap<i32, Entry>,
     tx: Sender,
     login_target: String,
+    #[cfg(target_os = "macos")]
+    browser_proxy: Option<crate::remote_browser::socks::BrowserProxy>,
     /// Raised once, by `close_all`, for the channels its `clear` cannot reach:
     /// one parked on its target socket is not on the inbound queue.
     teardown: watch::Sender<bool>,
@@ -46,8 +48,22 @@ impl PortForwardMux {
             channels: HashMap::new(),
             tx,
             login_target,
+            #[cfg(target_os = "macos")]
+            browser_proxy: None,
             teardown: watch::channel(false).0,
         }
+    }
+
+    #[cfg(target_os = "macos")]
+    pub async fn browser(
+        tx: Sender,
+        login_target: String,
+        token: String,
+    ) -> hbb_common::ResultType<Self> {
+        let proxy = crate::remote_browser::socks::BrowserProxy::start(token).await?;
+        let mut mux = Self::new(tx, login_target);
+        mux.browser_proxy = Some(proxy);
+        Ok(mux)
     }
 
     /// `tunnel_permitted` is consulted for `open` alone, so the lookup is not
@@ -135,6 +151,9 @@ impl PortForwardMux {
             self.reply(opened_msg(id, false, "Port forward target not authorized", 0));
             return;
         }
+        #[cfg(target_os = "macos")]
+        let addr = self.browser_proxy.as_ref()
+            .map(|proxy| proxy.address.to_string()).unwrap_or(addr);
         let (inbound_tx, inbound_rx) = mpsc::unbounded_channel();
         let credit = Arc::new(SendCredit::new(effective_window(open.window)));
         let window = Arc::new(Mutex::new(RecvWindow::new(INITIAL_WINDOW)));
