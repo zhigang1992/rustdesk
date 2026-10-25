@@ -59,8 +59,9 @@ class RawKeyFocusScope extends StatelessWidget {
 bool isSpecialHoldDragActive = false;
 // Cache the last focal point to calculate deltas in special hold-drag mode.
 Offset _lastSpecialHoldDragFocalPoint = Offset.zero;
-// Games that poll input per frame read a cursor jump and a button press in the
-// same frame as a drag from the old position, so touch mode presses after this.
+// The host clicks wherever its cursor already is. A move and a button in the
+// same burst still press the previous point, then the cursor arrives. Touch
+// mode waits this long after a move before any press, tap or drag.
 const _kPressAfterMoveDelay = Duration(milliseconds: 60);
 
 bool isTwoFingerRightDragMode() => getTwoFingerMode() == TwoFingerMode.rightDrag;
@@ -194,6 +195,7 @@ class _RawTouchGestureDetectorRegionState
       await _sendTouchInOrder(() async {
         final isMoved = await ffi.cursorModel.move(dx, dy);
         if (isMoved) {
+          await Future.delayed(_kPressAfterMoveDelay);
           // If pan already handled 'down', don't send it again.
           if (lastTapDownDetails != null && !panStarted) {
             await inputModel.tapDown(MouseButtons.left);
