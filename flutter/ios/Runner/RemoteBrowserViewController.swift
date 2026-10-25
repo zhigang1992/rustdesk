@@ -7,6 +7,11 @@ import CryptoKit
 final class RemoteBrowserViewController: UIViewController, WKNavigationDelegate, WKUIDelegate, UITextFieldDelegate {
     private final class Tab {
         let webView: WKWebView
+        let row = UIStackView()
+        let button = UIButton(type: .system)
+        let address = UITextField()
+        let close = UIButton(type: .system)
+        var width: NSLayoutConstraint?
         var observations: [NSKeyValueObservation] = []
         init(_ webView: WKWebView) { self.webView = webView }
     }
@@ -16,20 +21,33 @@ final class RemoteBrowserViewController: UIViewController, WKNavigationDelegate,
         let selected: Int
     }
 
+    private struct Bookmark: Codable {
+        var title: String
+        var url: String
+    }
+
     var onClose: (() -> Void)?
     private let store: WKWebsiteDataStore
     private let storageKey: String
+    private let bookmarksKey: String
+    private let desktopKey: String
+    private let peer: String
     private let initialURL: URL?
     private var tabs: [Tab] = []
+    private var bookmarks: [Bookmark] = []
     private var selected = 0
     private var finished = false
+    private var desktopMode: Bool
+    private let bar = UIStackView()
+    private let tabScroll = UIScrollView()
     private let tabStrip = UIStackView()
-    private let address = UITextField()
     private let content = UIView()
-    private let status = UILabel()
-    private var backButton: UIBarButtonItem!
-    private var forwardButton: UIBarButtonItem!
-    private var reloadButton: UIBarButtonItem!
+    private let message = UILabel()
+    private let backButton = UIButton(type: .system)
+    private let forwardButton = UIButton(type: .system)
+    private let reloadButton = UIButton(type: .system)
+    private let bookmarksButton = UIButton(type: .system)
+    private let moreButton = UIButton(type: .system)
 
     static func profileID(for identity: String) -> UUID {
         let b = Array(SHA256.hash(data: Data(("rustdesk.remote-browser.v1\0" + identity).utf8)).prefix(16))
@@ -43,11 +61,36 @@ final class RemoteBrowserViewController: UIViewController, WKNavigationDelegate,
         return url
     }
 
+    static func addressURL(_ text: String) -> URL? {
+        let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if text.contains("://") { return webURL(text) }
+        let local = text == "localhost" || text.hasPrefix("localhost:") || text.hasPrefix("127.0.0.1") || text.hasPrefix("[::1]")
+        return webURL((local ? "http://" : "https://") + text)
+    }
+
+    static func allowsNavigation(_ url: URL, mainFrame: Bool) -> Bool {
+        if webURL(url.absoluteString) != nil { return true }
+        switch url.scheme?.lowercased() {
+        case "about":
+            let page = url.absoluteString.lowercased().split(separator: "#", maxSplits: 1).first
+            return page == "about:blank" || page == "about:srcdoc"
+        case "blob": return true
+        case "data": return !mainFrame
+        default: return false
+        }
+    }
+
     init(peer: String, identity: String, port: UInt16, username: String, password: String, initialURL: URL?) {
         let profileID = Self.profileID(for: identity)
         store = WKWebsiteDataStore(forIdentifier: profileID)
         storageKey = "remote-browser.tabs." + profileID.uuidString
+        bookmarksKey = "remote-browser.bookmarks." + profileID.uuidString
+        desktopKey = "remote-browser.desktop." + profileID.uuidString
+        self.peer = peer
         self.initialURL = initialURL
+        desktopMode = UserDefaults.standard.object(forKey: desktopKey) as? Bool ?? (UIDevice.current.userInterfaceIdiom == .pad)
+        if let data = UserDefaults.standard.data(forKey: bookmarksKey),
+           let saved = try? JSONDecoder().decode([Bookmark].self, from: data) { bookmarks = saved }
         var proxy = ProxyConfiguration(socksv5Proxy: .hostPort(host: "127.0.0.1", port: NWEndpoint.Port(rawValue: port)!))
         proxy.allowFailover = false
         proxy.matchDomains = []
@@ -55,78 +98,106 @@ final class RemoteBrowserViewController: UIViewController, WKNavigationDelegate,
         proxy.applyCredential(username: username, password: password)
         store.proxyConfigurations = [proxy]
         super.init(nibName: nil, bundle: nil)
-        title = "Browser · " + peer
     }
 
     required init?(coder: NSCoder) { return nil }
+    override var prefersStatusBarHidden: Bool { true }
 
     override func viewDidLoad() {
         super.viewDidLoad()
+        navigationController?.setNavigationBarHidden(true, animated: false)
         view.backgroundColor = .systemBackground
-        navigationItem.rightBarButtonItem = UIBarButtonItem(barButtonSystemItem: .done, target: self, action: #selector(finish))
-        let layout = UIStackView()
-        layout.axis = .vertical
-        layout.spacing = 6
-        layout.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(layout)
-        NSLayoutConstraint.activate([
-            layout.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
-            layout.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor),
-            layout.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor),
-            layout.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor),
-        ])
-        let scroll = UIScrollView()
-        scroll.showsHorizontalScrollIndicator = false
+        bar.spacing = 2
+        bar.alignment = .center
+        bar.accessibilityIdentifier = "Browser bar"
+        bar.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(bar)
+        configure(backButton, symbol: "chevron.left", label: "Back", action: #selector(goBack))
+        configure(forwardButton, symbol: "chevron.right", label: "Forward", action: #selector(goForward))
+        configure(reloadButton, symbol: "arrow.clockwise", label: "Reload", action: #selector(reload))
+        bar.addArrangedSubview(backButton)
+        bar.addArrangedSubview(forwardButton)
+        bar.addArrangedSubview(reloadButton)
+        tabScroll.showsHorizontalScrollIndicator = false
         tabStrip.axis = .horizontal
-        tabStrip.spacing = 5
+        tabStrip.spacing = 4
         tabStrip.translatesAutoresizingMaskIntoConstraints = false
-        scroll.addSubview(tabStrip)
+        tabScroll.addSubview(tabStrip)
         NSLayoutConstraint.activate([
-            scroll.heightAnchor.constraint(equalToConstant: 42),
-            tabStrip.leadingAnchor.constraint(equalTo: scroll.contentLayoutGuide.leadingAnchor, constant: 6),
-            tabStrip.trailingAnchor.constraint(equalTo: scroll.contentLayoutGuide.trailingAnchor, constant: -6),
-            tabStrip.topAnchor.constraint(equalTo: scroll.contentLayoutGuide.topAnchor),
-            tabStrip.bottomAnchor.constraint(equalTo: scroll.contentLayoutGuide.bottomAnchor),
-            tabStrip.heightAnchor.constraint(equalTo: scroll.frameLayoutGuide.heightAnchor),
+            tabStrip.leadingAnchor.constraint(equalTo: tabScroll.contentLayoutGuide.leadingAnchor),
+            tabStrip.trailingAnchor.constraint(equalTo: tabScroll.contentLayoutGuide.trailingAnchor),
+            tabStrip.topAnchor.constraint(equalTo: tabScroll.contentLayoutGuide.topAnchor),
+            tabStrip.bottomAnchor.constraint(equalTo: tabScroll.contentLayoutGuide.bottomAnchor),
+            tabStrip.heightAnchor.constraint(equalTo: tabScroll.frameLayoutGuide.heightAnchor),
+            tabScroll.heightAnchor.constraint(equalToConstant: 44),
         ])
-        layout.addArrangedSubview(scroll)
-        address.borderStyle = .roundedRect
-        address.keyboardType = .URL
-        address.autocapitalizationType = .none
-        address.autocorrectionType = .no
-        address.returnKeyType = .go
-        address.clearButtonMode = .whileEditing
-        address.placeholder = "URL on remote Mac"
-        address.accessibilityLabel = "Address"
-        address.delegate = self
-        address.heightAnchor.constraint(equalToConstant: 42).isActive = true
-        layout.addArrangedSubview(address)
-        layout.addArrangedSubview(content)
-        content.setContentHuggingPriority(.defaultLow, for: .vertical)
-        status.font = .preferredFont(forTextStyle: .caption1)
-        status.textColor = .secondaryLabel
-        status.text = "Web traffic via remote Mac"
-        layout.addArrangedSubview(status)
-        let toolbar = UIToolbar()
-        backButton = UIBarButtonItem(image: UIImage(systemName: "chevron.left"), style: .plain, target: self, action: #selector(goBack))
-        backButton.accessibilityLabel = "Back"
-        forwardButton = UIBarButtonItem(image: UIImage(systemName: "chevron.right"), style: .plain, target: self, action: #selector(goForward))
-        forwardButton.accessibilityLabel = "Forward"
-        reloadButton = UIBarButtonItem(barButtonSystemItem: .refresh, target: self, action: #selector(reload))
-        let add = UIBarButtonItem(barButtonSystemItem: .add, target: self, action: #selector(addBlankTab))
-        add.accessibilityLabel = "New tab"
-        toolbar.items = [backButton, .flexibleSpace(), forwardButton, .flexibleSpace(), reloadButton, .flexibleSpace(), add]
-        layout.addArrangedSubview(toolbar)
+        tabScroll.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        bar.addArrangedSubview(tabScroll)
+        let add = UIButton(type: .system)
+        configure(add, symbol: "plus", label: "New tab", action: #selector(addBlankTab))
+        bar.addArrangedSubview(add)
+        configure(bookmarksButton, symbol: "book", label: "Bookmarks")
+        bookmarksButton.showsMenuAsPrimaryAction = true
+        bar.addArrangedSubview(bookmarksButton)
+        configure(moreButton, symbol: "ellipsis.circle", label: "Browser menu")
+        moreButton.showsMenuAsPrimaryAction = true
+        bar.addArrangedSubview(moreButton)
+        let done = UIButton(type: .system)
+        configure(done, symbol: "xmark.circle", label: "Close browser", action: #selector(finish))
+        bar.addArrangedSubview(done)
+        content.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(content)
+        NSLayoutConstraint.activate([
+            bar.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
+            bar.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor, constant: 4),
+            bar.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -4),
+            bar.heightAnchor.constraint(equalToConstant: 44),
+            content.topAnchor.constraint(equalTo: bar.bottomAnchor),
+            content.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            content.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            content.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+        ])
+        message.font = .preferredFont(forTextStyle: .body)
+        message.textColor = .secondaryLabel
+        message.backgroundColor = .secondarySystemBackground
+        message.numberOfLines = 0
+        message.textAlignment = .center
+        message.isHidden = true
+        message.translatesAutoresizingMaskIntoConstraints = false
+        content.addSubview(message)
+        NSLayoutConstraint.activate([
+            message.centerXAnchor.constraint(equalTo: content.centerXAnchor),
+            message.centerYAnchor.constraint(equalTo: content.centerYAnchor),
+            message.widthAnchor.constraint(lessThanOrEqualTo: content.widthAnchor, constant: -40),
+        ])
 
         if let data = UserDefaults.standard.data(forKey: storageKey),
            let saved = try? JSONDecoder().decode(SavedTabs.self, from: data) {
-            for text in saved.urls.prefix(32) {
-                _ = addTab(url: Self.webURL(text))
-            }
+            for text in saved.urls.prefix(32) { _ = addTab(url: Self.webURL(text)) }
             if !tabs.isEmpty { selectTab(min(max(saved.selected, 0), tabs.count - 1)) }
         }
         if let url = initialURL { _ = addTab(url: url) }
         if tabs.isEmpty { _ = addTab() }
+    }
+
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        let compact = view.bounds.width < 600
+        forwardButton.isHidden = compact
+        reloadButton.isHidden = compact
+        for (index, tab) in tabs.enumerated() {
+            let available = max(140, tabScroll.bounds.width)
+            let width = tabs.count == 1 ? available : min(index == selected ? 380 : 240, available)
+            if tab.width?.constant != width { tab.width?.constant = width }
+        }
+    }
+
+    private func configure(_ button: UIButton, symbol: String, label: String, action: Selector? = nil) {
+        button.setImage(UIImage(systemName: symbol), for: .normal)
+        button.accessibilityLabel = label
+        button.widthAnchor.constraint(equalToConstant: 36).isActive = true
+        button.heightAnchor.constraint(equalToConstant: 44).isActive = true
+        if let action = action { button.addTarget(self, action: action, for: .touchUpInside) }
     }
 
     private var current: WKWebView? { tabs.indices.contains(selected) ? tabs[selected].webView : nil }
@@ -134,17 +205,59 @@ final class RemoteBrowserViewController: UIViewController, WKNavigationDelegate,
     @discardableResult
     private func addTab(configuration: WKWebViewConfiguration? = nil, url: URL? = nil) -> WKWebView? {
         guard tabs.count < 32 else {
-            status.text = "Close a tab before opening another (32 tab limit)."
+            showMessage("Close a tab before opening another (32 tab limit).")
             return nil
         }
-        let configuration = configuration ?? WKWebViewConfiguration()
-        configuration.websiteDataStore = store
-        configuration.preferences.javaScriptCanOpenWindowsAutomatically = true
-        let web = WKWebView(frame: .zero, configuration: configuration)
+        let config = configuration ?? WKWebViewConfiguration()
+        if configuration == nil {
+            config.websiteDataStore = store
+            let version = ProcessInfo.processInfo.operatingSystemVersion
+            // Bare WKWebView omits the browser version tokens used by sites for browser layouts.
+            let safariVersion = desktopMode ? "605.1.15" : "604.1"
+            config.applicationNameForUserAgent = "Version/\(version.majorVersion).\(version.minorVersion) Safari/\(safariVersion)"
+            config.defaultWebpagePreferences.preferredContentMode = desktopMode ? .desktop : .mobile
+        }
+        let web = WKWebView(frame: .zero, configuration: config)
         web.navigationDelegate = self
         web.uiDelegate = self
         web.allowsBackForwardNavigationGestures = true
+        web.isFindInteractionEnabled = true
+        web.isInspectable = Bundle.main.bundleIdentifier?.hasSuffix(".dev") == true
         let tab = Tab(web)
+        tab.row.alignment = .center
+        tab.row.layer.cornerRadius = 8
+        tab.row.clipsToBounds = true
+        tab.width = tab.row.widthAnchor.constraint(equalToConstant: 240)
+        tab.width?.isActive = true
+        tab.button.titleLabel?.font = .systemFont(ofSize: 14)
+        tab.button.titleLabel?.lineBreakMode = .byTruncatingMiddle
+        tab.button.contentHorizontalAlignment = .leading
+        tab.button.addAction(UIAction { [weak self, weak web] _ in
+            guard let self = self, let index = self.tabs.firstIndex(where: { $0.webView === web }) else { return }
+            self.selectTab(index)
+        }, for: .touchUpInside)
+        tab.address.font = .systemFont(ofSize: 14)
+        tab.address.keyboardType = .URL
+        tab.address.autocapitalizationType = .none
+        tab.address.autocorrectionType = .no
+        tab.address.returnKeyType = .go
+        tab.address.clearButtonMode = .whileEditing
+        tab.address.placeholder = "URL on \(peer)"
+        tab.address.accessibilityLabel = "Address"
+        tab.address.delegate = self
+        tab.address.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        tab.button.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        configure(tab.close, symbol: "xmark", label: "Close tab")
+        tab.close.addAction(UIAction { [weak self, weak web] _ in
+            guard let self = self, let index = self.tabs.firstIndex(where: { $0.webView === web }) else { return }
+            self.closeTab(index)
+        }, for: .touchUpInside)
+        tab.row.layoutMargins = UIEdgeInsets(top: 0, left: 8, bottom: 0, right: 0)
+        tab.row.isLayoutMarginsRelativeArrangement = true
+        tab.row.addArrangedSubview(tab.button)
+        tab.row.addArrangedSubview(tab.address)
+        tab.row.addArrangedSubview(tab.close)
+        tabStrip.addArrangedSubview(tab.row)
         tab.observations = [
             web.observe(\.url, options: [.new]) { [weak self] _, _ in self?.refresh() },
             web.observe(\.title, options: [.new]) { [weak self] _, _ in self?.refresh() },
@@ -158,67 +271,163 @@ final class RemoteBrowserViewController: UIViewController, WKNavigationDelegate,
 
     private func selectTab(_ index: Int) {
         guard tabs.indices.contains(index) else { return }
+        view.endEditing(true)
         selected = index
-        content.subviews.forEach { $0.removeFromSuperview() }
+        for tab in tabs { tab.webView.removeFromSuperview() }
         let web = tabs[index].webView
         web.translatesAutoresizingMaskIntoConstraints = false
-        content.addSubview(web)
+        content.insertSubview(web, belowSubview: message)
         NSLayoutConstraint.activate([
             web.topAnchor.constraint(equalTo: content.topAnchor), web.bottomAnchor.constraint(equalTo: content.bottomAnchor),
             web.leadingAnchor.constraint(equalTo: content.leadingAnchor), web.trailingAnchor.constraint(equalTo: content.trailingAnchor),
         ])
+        message.isHidden = true
         refresh()
+        view.layoutIfNeeded()
+        tabScroll.scrollRectToVisible(tabs[index].row.frame, animated: false)
     }
 
     private func closeTab(_ index: Int) {
         guard tabs.indices.contains(index) else { return }
-        tabs[index].webView.stopLoading()
-        tabs[index].webView.removeFromSuperview()
+        let tab = tabs[index]
+        tab.webView.stopLoading()
+        tab.webView.removeFromSuperview()
+        tabStrip.removeArrangedSubview(tab.row)
+        tab.row.removeFromSuperview()
         tabs.remove(at: index)
         if index < selected { selected -= 1 }
         selected = min(selected, max(tabs.count - 1, 0))
-        saveTabs()
-        if tabs.isEmpty { finish() } else { selectTab(selected) }
+        if tabs.isEmpty { _ = addTab() } else { selectTab(selected) }
     }
 
     private func saveTabs() {
         let state = SavedTabs(urls: tabs.map { $0.webView.url?.absoluteString ?? "about:blank" }, selected: selected)
         do { UserDefaults.standard.set(try JSONEncoder().encode(state), forKey: storageKey) }
-        catch { status.text = "Could not save browser tabs: " + error.localizedDescription }
+        catch { showMessage("Could not save browser tabs: " + error.localizedDescription) }
     }
 
     private func refresh() {
         guard isViewLoaded, !finished else { return }
-        if !address.isFirstResponder { address.text = current?.url?.absoluteString }
         backButton.isEnabled = current?.canGoBack == true
         forwardButton.isEnabled = current?.canGoForward == true
-        tabStrip.arrangedSubviews.forEach { tabStrip.removeArrangedSubview($0); $0.removeFromSuperview() }
+        let loading = current?.isLoading == true
+        reloadButton.setImage(UIImage(systemName: loading ? "xmark" : "arrow.clockwise"), for: .normal)
+        reloadButton.accessibilityLabel = loading ? "Stop loading" : "Reload"
         for (index, tab) in tabs.enumerated() {
-            let row = UIStackView()
-            row.layer.cornerRadius = 7
-            row.backgroundColor = index == selected ? .tertiarySystemFill : .secondarySystemBackground
-            let button = UIButton(type: .system)
-            button.setTitle(tab.webView.title?.isEmpty == false ? tab.webView.title : (tab.webView.url?.host ?? "New tab"), for: .normal)
-            button.titleLabel?.lineBreakMode = .byTruncatingTail
-            button.widthAnchor.constraint(equalToConstant: 145).isActive = true
-            button.accessibilityLabel = "Select tab \(index + 1)"
-            button.addAction(UIAction { [weak self] _ in self?.selectTab(index) }, for: .touchUpInside)
-            let close = UIButton(type: .system)
-            close.setImage(UIImage(systemName: "xmark"), for: .normal)
-            close.widthAnchor.constraint(equalToConstant: 32).isActive = true
-            close.accessibilityLabel = "Close tab \(index + 1)"
-            close.addAction(UIAction { [weak self] _ in self?.closeTab(index) }, for: .touchUpInside)
-            row.addArrangedSubview(button)
-            row.addArrangedSubview(close)
-            tabStrip.addArrangedSubview(row)
+            let active = index == selected
+            tab.row.backgroundColor = active ? .tertiarySystemFill : .secondarySystemBackground
+            tab.button.isHidden = active
+            tab.address.isHidden = !active
+            if !tab.address.isFirstResponder { tab.address.text = tab.webView.url?.absoluteString }
+            tab.button.setTitle(tab.webView.url?.absoluteString ?? "New tab", for: .normal)
+            tab.button.accessibilityLabel = "Select tab \(index + 1)"
+            tab.close.accessibilityLabel = "Close tab \(index + 1)"
         }
+        updateMenus()
+        view.setNeedsLayout()
         saveTabs()
     }
 
-    @objc private func addBlankTab() { _ = addTab(); address.becomeFirstResponder() }
-    @objc private func goBack() { current?.goBack() }
-    @objc private func goForward() { current?.goForward() }
-    @objc private func reload() { current?.reload() }
+    private func updateMenus() {
+        let save = UIAction(title: "Bookmark this page", image: UIImage(systemName: "bookmark")) { [weak self] _ in self?.editBookmark() }
+        save.attributes = Self.webURL(current?.url?.absoluteString ?? "") == nil ? .disabled : []
+        let open = bookmarks.map { bookmark in
+            UIAction(title: bookmark.title, subtitle: bookmark.url, image: UIImage(systemName: "bookmark")) { [weak self] _ in
+                guard let url = Self.webURL(bookmark.url) else { return }
+                self?.load(url)
+            }
+        }
+        let manage = bookmarks.enumerated().map { index, bookmark in
+            UIMenu(title: bookmark.title, children: [
+                UIAction(title: "Open in new tab", image: UIImage(systemName: "plus.square")) { [weak self] _ in
+                    self?.addTab(url: Self.webURL(bookmark.url))
+                },
+                UIAction(title: "Edit", image: UIImage(systemName: "pencil")) { [weak self] _ in self?.editBookmark(index) },
+                UIAction(title: "Delete", image: UIImage(systemName: "trash"), attributes: .destructive) { [weak self] _ in
+                    guard let self = self, self.bookmarks.indices.contains(index) else { return }
+                    self.bookmarks.remove(at: index)
+                    self.saveBookmarks()
+                },
+            ])
+        }
+        bookmarksButton.menu = UIMenu(title: "Bookmarks · \(peer)", children: [save] + open + (manage.isEmpty ? [] : [UIMenu(title: "Manage bookmarks", children: manage)]))
+        let desktop = UIAction(title: "Desktop website", image: UIImage(systemName: "desktopcomputer"), state: desktopMode ? .on : .off) { [weak self] _ in
+            guard let self = self else { return }
+            self.desktopMode.toggle()
+            UserDefaults.standard.set(self.desktopMode, forKey: self.desktopKey)
+            self.current?.reload()
+            self.updateMenus()
+        }
+        let forward = UIAction(title: "Forward", image: UIImage(systemName: "chevron.right")) { [weak self] _ in self?.goForward() }
+        forward.attributes = current?.canGoForward == true ? [] : .disabled
+        moreButton.menu = UIMenu(title: "Browsing via \(peer)", children: [
+            forward,
+            UIAction(title: current?.isLoading == true ? "Stop loading" : "Reload", image: UIImage(systemName: "arrow.clockwise")) { [weak self] _ in self?.reload() },
+            desktop,
+            UIAction(title: "Find on page", image: UIImage(systemName: "magnifyingglass")) { [weak self] _ in
+                self?.current?.findInteraction?.presentFindNavigator(showingReplace: false)
+            },
+            UIAction(title: "Copy address", image: UIImage(systemName: "doc.on.doc")) { [weak self] _ in
+                UIPasteboard.general.string = self?.current?.url?.absoluteString
+            },
+        ])
+    }
+
+    private func editBookmark(_ index: Int? = nil) {
+        let bookmark = index.flatMap { bookmarks.indices.contains($0) ? bookmarks[$0] : nil }
+        guard bookmark != nil || Self.webURL(current?.url?.absoluteString ?? "") != nil else { return }
+        let alert = UIAlertController(title: bookmark == nil ? "Add bookmark" : "Edit bookmark", message: "Saved for \(peer)", preferredStyle: .alert)
+        alert.addTextField { field in field.placeholder = "Name"; field.text = bookmark?.title ?? self.current?.title }
+        alert.addTextField { field in
+            field.placeholder = "URL"
+            field.keyboardType = .URL
+            field.autocapitalizationType = .none
+            field.autocorrectionType = .no
+            field.text = bookmark?.url ?? self.current?.url?.absoluteString
+        }
+        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+        alert.addAction(UIAlertAction(title: "Save", style: .default) { [weak self, weak alert] _ in
+            guard let self = self, let fields = alert?.textFields, let url = Self.addressURL(fields[1].text ?? "") else {
+                self?.showMessage("Enter an HTTP or HTTPS bookmark URL.")
+                return
+            }
+            let title = fields[0].text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let updated = Bookmark(title: title.isEmpty ? (url.host ?? url.absoluteString) : title, url: url.absoluteString)
+            if let index = index, self.bookmarks.indices.contains(index) { self.bookmarks[index] = updated }
+            else if let existing = self.bookmarks.firstIndex(where: { $0.url == updated.url }) { self.bookmarks[existing] = updated }
+            else { self.bookmarks.append(updated) }
+            self.saveBookmarks()
+        })
+        present(alert, animated: true)
+    }
+
+    private func saveBookmarks() {
+        do { UserDefaults.standard.set(try JSONEncoder().encode(bookmarks), forKey: bookmarksKey) }
+        catch { showMessage("Could not save bookmarks: " + error.localizedDescription) }
+        updateMenus()
+    }
+
+    private func load(_ url: URL) {
+        view.endEditing(true)
+        message.isHidden = true
+        current?.load(URLRequest(url: url))
+    }
+
+    private func showMessage(_ text: String) {
+        message.text = text
+        message.isHidden = false
+    }
+
+    @objc private func addBlankTab() {
+        guard addTab() != nil else { return }
+        tabs.last?.address.becomeFirstResponder()
+    }
+    @objc private func goBack() { message.isHidden = true; current?.goBack() }
+    @objc private func goForward() { message.isHidden = true; current?.goForward() }
+    @objc private func reload() {
+        message.isHidden = true
+        if current?.isLoading == true { current?.stopLoading() } else { current?.reload() }
+    }
 
     @objc func finish() {
         guard !finished else { return }
@@ -229,27 +438,26 @@ final class RemoteBrowserViewController: UIViewController, WKNavigationDelegate,
         dismiss(animated: true) { completion?() }
     }
 
+    func textFieldDidBeginEditing(_ textField: UITextField) { textField.selectAll(nil) }
+
     func textFieldShouldReturn(_ textField: UITextField) -> Bool {
-        var text = textField.text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if !text.contains("://") {
-            let local = text == "localhost" || text.hasPrefix("localhost:") || text.hasPrefix("127.0.0.1") || text.hasPrefix("[::1]")
-            text = (local ? "http://" : "https://") + text
+        guard let url = Self.addressURL(textField.text ?? "") else {
+            showMessage("Enter an HTTP or HTTPS URL without credentials.")
+            return false
         }
-        guard let url = Self.webURL(text) else { status.text = "Enter an HTTP or HTTPS URL without credentials."; return false }
-        textField.resignFirstResponder()
-        status.text = "Web traffic via remote Mac"
-        current?.load(URLRequest(url: url))
+        load(url)
         return true
     }
 
-    func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
-        guard let url = navigationAction.request.url else { decisionHandler(.cancel); return }
-        if Self.webURL(url.absoluteString) != nil || url.absoluteString == "about:blank" {
-            decisionHandler(.allow)
-        } else {
-            status.text = "This browser supports HTTP and HTTPS navigation."
-            decisionHandler(.cancel)
+    func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, preferences: WKWebpagePreferences, decisionHandler: @escaping (WKNavigationActionPolicy, WKWebpagePreferences) -> Void) {
+        preferences.preferredContentMode = desktopMode ? .desktop : .mobile
+        guard let url = navigationAction.request.url,
+              Self.allowsNavigation(url, mainFrame: navigationAction.targetFrame?.isMainFrame != false) else {
+            if webView === current { showMessage("This link cannot be opened in the remote browser.") }
+            decisionHandler(.cancel, preferences)
+            return
         }
+        decisionHandler(.allow, preferences)
     }
 
     func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration, for navigationAction: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
@@ -261,10 +469,37 @@ final class RemoteBrowserViewController: UIViewController, WKNavigationDelegate,
         if let index = tabs.firstIndex(where: { $0.webView === webView }) { closeTab(index) }
     }
 
+    func webView(_ webView: WKWebView, runJavaScriptAlertPanelWithMessage message: String, initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping () -> Void) {
+        guard webView === current, presentedViewController == nil else { completionHandler(); return }
+        let alert = UIAlertController(title: frame.request.url?.host, message: message, preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: "OK", style: .default) { _ in completionHandler() })
+        present(alert, animated: true)
+    }
+
+    func webView(_ webView: WKWebView, runJavaScriptConfirmPanelWithMessage message: String, initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping (Bool) -> Void) {
+        guard webView === current, presentedViewController == nil else { completionHandler(false); return }
+        let alert = UIAlertController(title: frame.request.url?.host, message: message, preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel) { _ in completionHandler(false) })
+        alert.addAction(UIAlertAction(title: "OK", style: .default) { _ in completionHandler(true) })
+        present(alert, animated: true)
+    }
+
+    func webView(_ webView: WKWebView, runJavaScriptTextInputPanelWithPrompt prompt: String, defaultText: String?, initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping (String?) -> Void) {
+        guard webView === current, presentedViewController == nil else { completionHandler(nil); return }
+        let alert = UIAlertController(title: frame.request.url?.host, message: prompt, preferredStyle: .alert)
+        alert.addTextField { $0.text = defaultText }
+        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel) { _ in completionHandler(nil) })
+        alert.addAction(UIAlertAction(title: "OK", style: .default) { [weak alert] _ in completionHandler(alert?.textFields?.first?.text) })
+        present(alert, animated: true)
+    }
+
+    func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
+        if webView === current { message.isHidden = true }
+    }
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) { refresh() }
-    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) { show(error) }
-    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) { show(error) }
-    private func show(_ error: Error) {
-        if (error as NSError).code != NSURLErrorCancelled { status.text = error.localizedDescription }
+    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) { show(error, from: webView) }
+    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) { show(error, from: webView) }
+    private func show(_ error: Error, from web: WKWebView) {
+        if web === current && (error as NSError).code != NSURLErrorCancelled { showMessage(error.localizedDescription) }
     }
 }
