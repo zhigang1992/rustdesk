@@ -3,12 +3,15 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_hbb/common/shared_state.dart';
+import 'package:flutter_hbb/common/widgets/control_pad.dart';
 import 'package:flutter_hbb/common/widgets/toolbar.dart';
 import 'package:flutter_hbb/consts.dart';
 import 'package:flutter_hbb/mobile/widgets/floating_mouse.dart';
 import 'package:flutter_hbb/mobile/widgets/floating_mouse_widgets.dart';
 import 'package:flutter_hbb/mobile/widgets/gesture_help.dart';
 import 'package:flutter_hbb/models/chat_model.dart';
+import 'package:flutter_hbb/models/control_pad_model.dart';
+import 'package:flutter_hbb/models/control_pad_store.dart';
 import 'package:flutter_keyboard_visibility/flutter_keyboard_visibility.dart';
 import 'package:flutter_svg/svg.dart';
 import 'package:get/get.dart';
@@ -87,7 +90,8 @@ class RemotePage extends StatefulWidget {
 
 class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
   Timer? _timer;
-  bool _showBar = !isWebDesktop;
+  // Control Pad owns session actions; keep the legacy bottom bar off until Menu.
+  bool _showBar = false;
   bool _showGestureHelp = false;
   String _value = '';
   Orientation? _currentOrientation;
@@ -101,6 +105,10 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
   final FocusNode _mobileFocusNode = FocusNode();
   final FocusNode _physicalFocusNode = FocusNode();
   var _showEdit = false; // use soft keyboard
+  // True from the keyboard button press until the keyboard is turned off.
+  bool _keyboardWanted = false;
+  // True only after the soft keyboard has actually appeared for this open.
+  bool _softKeyboardShown = false;
 
   Worker? _waylandKeyboardGateWorker;
   bool _waylandKeyboardGateInitialized = false;
@@ -128,7 +136,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
       forceRelay: widget.forceRelay,
     );
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      SystemChrome.setEnabledSystemUIMode(SystemUiMode.manual, overlays: []);
+      _hideRemoteSystemUi();
       gFFI.dialogManager
           .showLoading(translate('Connecting...'), onCancel: closeConnection);
     });
@@ -224,7 +232,14 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       trySyncClipboard();
+      _hideRemoteSystemUi();
     }
+  }
+
+  /// iOS only honors this when status-bar appearance is view-controller based.
+  void _hideRemoteSystemUi() {
+    if (_showEdit) return;
+    SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
   }
 
   // For client side
@@ -260,6 +275,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     inputModel.keyboardInputAllowed = false;
 
     // Ensure soft keyboard is not active before user confirms.
+    _keyboardWanted = false;
     _showEdit = false;
     gFFI.invokeMethod("enable_soft_keyboard", false);
     _mobileFocusNode.unfocus();
@@ -281,40 +297,48 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
       );
 
   void onSoftKeyboardChanged(bool visible) {
-    if (!visible) {
-      SystemChrome.setEnabledSystemUIMode(SystemUiMode.manual, overlays: []);
-      // [pi.version.isNotEmpty] -> check ready or not, avoid login without soft-keyboard
-      if (gFFI.chatModel.chatWindowOverlayEntry == null &&
-          gFFI.ffiModel.pi.version.isNotEmpty) {
-        gFFI.invokeMethod("enable_soft_keyboard", false);
-      }
-
-      // Workaround for iOS: physical keyboard input fails after virtual keyboard is hidden
-      // https://github.com/flutter/flutter/issues/39900
-      // https://github.com/rustdesk/rustdesk/discussions/11843#discussioncomment-13499698 - Virtual keyboard issue
-      if (isIOS) {
-        _iosKeyboardWorkaroundTimer?.cancel();
-        _iosKeyboardWorkaroundTimer = Timer(Duration(milliseconds: 100), () {
-          if (!mounted || gFFI.chatModel.inputNode.hasFocus) return;
-          _physicalFocusNode.unfocus();
-          _iosKeyboardWorkaroundTimer = Timer(Duration(milliseconds: 50), () {
-            if (!mounted || gFFI.chatModel.inputNode.hasFocus) return;
-            _physicalFocusNode.requestFocus();
-          });
-        });
-      }
-    } else {
+    if (visible) {
+      _softKeyboardShown = true;
       _iosKeyboardWorkaroundTimer?.cancel();
       _iosKeyboardWorkaroundTimer = null;
-      _timer?.cancel();
-      _timer = Timer(kMobileDelaySoftKeyboardFocus, () {
-        SystemChrome.setEnabledSystemUIMode(SystemUiMode.manual,
-            overlays: SystemUiOverlay.values);
-        _mobileFocusNode.requestFocus();
+      setState(() {});
+      return;
+    }
+    // A hide notification before the keyboard has appeared is the open race.
+    // Treating it as a dismiss puts focus back on the canvas and the keyboard
+    // never stays up.
+    if (_showEdit && !_softKeyboardShown) return;
+    _closeKeyboard();
+  }
+
+  void _closeKeyboard() {
+    if (!_keyboardWanted && !_showEdit) return;
+    _keyboardWanted = false;
+    _timer?.cancel();
+    _softKeyboardShown = false;
+    _showEdit = false;
+    _mobileFocusNode.unfocus();
+    // [pi.version.isNotEmpty] -> check ready or not, avoid login without soft-keyboard
+    if (gFFI.chatModel.chatWindowOverlayEntry == null &&
+        gFFI.ffiModel.pi.version.isNotEmpty) {
+      gFFI.invokeMethod("enable_soft_keyboard", false);
+    }
+    _hideRemoteSystemUi();
+    // Workaround for iOS: physical keyboard input fails after virtual keyboard is hidden
+    // https://github.com/flutter/flutter/issues/39900
+    // https://github.com/rustdesk/rustdesk/discussions/11843#discussioncomment-13499698 - Virtual keyboard issue
+    if (isIOS) {
+      _iosKeyboardWorkaroundTimer?.cancel();
+      _iosKeyboardWorkaroundTimer = Timer(Duration(milliseconds: 100), () {
+        if (!mounted || _showEdit) return;
+        _physicalFocusNode.unfocus();
+        _iosKeyboardWorkaroundTimer = Timer(Duration(milliseconds: 50), () {
+          if (!mounted || _showEdit) return;
+          _physicalFocusNode.requestFocus();
+        });
       });
     }
-    // update for Scaffold
-    setState(() {});
+    if (mounted) setState(() {});
   }
 
   void _handleIOSSoftKeyboardInput(String newValue) {
@@ -437,6 +461,10 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
   }
 
   void openKeyboard() {
+    if (_keyboardWanted) {
+      _closeKeyboard();
+      return;
+    }
     final allowWaylandKeyboard =
         mainGetPeerBoolOptionSync(widget.id, kPeerOptionAllowWaylandKeyboard);
     if (shouldShowWaylandKeyboardPrompt(
@@ -459,21 +487,24 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
   }
 
   void _openKeyboardUnlocked() {
+    _keyboardWanted = true;
     inputModel.keyboardInputAllowed = true;
     gFFI.invokeMethod("enable_soft_keyboard", true);
     // destroy first, so that our _value trick can work
     _value = initText;
     _textController.text = _value;
+    _softKeyboardShown = false;
+    _physicalFocusNode.unfocus();
     setState(() => _showEdit = false);
     _timer?.cancel();
     _timer = Timer(kMobileDelaySoftKeyboard, () {
-      // show now, and sleep a while to requestFocus to
-      // make sure edit ready, so that keyboard won't show/hide/show/hide happen
+      if (!mounted) return;
       setState(() => _showEdit = true);
-      _timer?.cancel();
-      _timer = Timer(kMobileDelaySoftKeyboardFocus, () {
-        SystemChrome.setEnabledSystemUIMode(SystemUiMode.manual,
+      WidgetsBinding.instance.addPostFrameCallback((_) async {
+        if (!mounted || !_showEdit) return;
+        await SystemChrome.setEnabledSystemUIMode(SystemUiMode.manual,
             overlays: SystemUiOverlay.values);
+        if (!mounted || !_showEdit) return;
         _mobileFocusNode.requestFocus();
       });
     });
@@ -487,9 +518,12 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
 
   @override
   Widget build(BuildContext context) {
-    final keyboardIsVisible =
-        keyboardVisibilityController.isVisible && _showEdit;
-    final showActionButton = !_showBar || keyboardIsVisible || _showGestureHelp;
+    // The visibility plugin can stay true after the keyboard closes and would
+    // leave the key bar and status bar up. Follow the toggle instead.
+    final keyboardIsVisible = _showEdit;
+    // Only surface a Scaffold FAB to dismiss keyboard / gesture help.
+    // Session controls live on the Control Pad (voice-FAB style chips).
+    final showDismissFab = keyboardIsVisible || _showGestureHelp;
 
     return WillPopScope(
       onWillPop: () async {
@@ -501,30 +535,18 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
           floatingActionButtonLocation: keyboardIsVisible
               ? FABLocation(FloatingActionButtonLocation.endFloat, 0, -35)
               : null,
-          floatingActionButton: !showActionButton
+          floatingActionButton: !showDismissFab
               ? null
               : FloatingActionButton(
                   mini: !keyboardIsVisible,
-                  child: Icon(
-                    (keyboardIsVisible || _showGestureHelp)
-                        ? Icons.expand_more
-                        : Icons.expand_less,
-                    color: Colors.white,
-                  ),
+                  child: const Icon(Icons.expand_more, color: Colors.white),
                   backgroundColor: MyTheme.accent,
                   onPressed: () {
-                    setState(() {
-                      if (keyboardIsVisible) {
-                        _showEdit = false;
-                        gFFI.invokeMethod("enable_soft_keyboard", false);
-                        _mobileFocusNode.unfocus();
-                        _physicalFocusNode.requestFocus();
-                      } else if (_showGestureHelp) {
-                        _showGestureHelp = false;
-                      } else {
-                        _showBar = !_showBar;
-                      }
-                    });
+                    if (keyboardIsVisible) {
+                      _closeKeyboard();
+                    } else if (_showGestureHelp) {
+                      setState(() => _showGestureHelp = false);
+                    }
                   }),
           bottomNavigationBar: Obx(() => Stack(
                 alignment: Alignment.bottomCenter,
@@ -542,46 +564,264 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                       : Offstage(),
                 ],
               )),
+          // Pad sits outside RawPointerMouseRegion so physical-mouse hits on
+          // chips are not also forwarded as remote desktop clicks.
           body: Obx(
-            () => getRawPointerAndKeyBody(Overlay(
-              initialEntries: [
-                OverlayEntry(builder: (context) {
-                  return Container(
-                    color: kColorCanvas,
-                    child: isWebDesktop
-                        ? getBodyForDesktopWithListener()
-                        : SafeArea(
-                            child:
-                                OrientationBuilder(builder: (ctx, orientation) {
-                              if (_currentOrientation != orientation) {
-                                Timer(const Duration(milliseconds: 200), () {
-                                  gFFI.dialogManager
-                                      .resetMobileActionsOverlay(ffi: gFFI);
-                                  _currentOrientation = orientation;
-                                  gFFI.canvasModel.updateViewStyle();
-                                });
-                              }
-                              return Container(
-                                color: MyTheme.canvasColor,
-                                child: inputModel.isPhysicalMouse.value
-                                    ? getBodyForMobile()
-                                    : RawTouchGestureDetectorRegion(
-                                        child: getBodyForMobile(),
-                                        ffi: gFFI,
-                                      ),
-                              );
-                            }),
-                          ),
-                  );
-                })
+            () => Stack(
+              fit: StackFit.expand,
+              children: [
+                getRawPointerAndKeyBody(Overlay(
+                  initialEntries: [
+                    OverlayEntry(builder: (context) {
+                      return Container(
+                        color: kColorCanvas,
+                        child: isWebDesktop
+                            ? getBodyForDesktopWithListener()
+                            : SafeArea(
+                                top: false,
+                                child: OrientationBuilder(
+                                    builder: (ctx, orientation) {
+                                  if (_currentOrientation != orientation) {
+                                    Timer(const Duration(milliseconds: 200),
+                                        () {
+                                      gFFI.dialogManager
+                                          .resetMobileActionsOverlay(ffi: gFFI);
+                                      _currentOrientation = orientation;
+                                      gFFI.canvasModel.updateViewStyle();
+                                    });
+                                  }
+                                  return Container(
+                                    color: MyTheme.canvasColor,
+                                    child: inputModel.isPhysicalMouse.value
+                                        ? getBodyForMobile()
+                                        : RawTouchGestureDetectorRegion(
+                                            child: getBodyForMobile(),
+                                            ffi: gFFI,
+                                          ),
+                                  );
+                                }),
+                              ),
+                      );
+                    }),
+                  ],
+                )),
+                ControlPadOverlay(
+                  onPress: _onControlPadPress,
+                  isOn: _padIsOn,
+                ),
               ],
-            )),
+            ),
           )),
     );
   }
 
   bool _handleLocalKeyEvent(KeyEvent event) => handleMobileLocalKeyEvent(event,
       remoteFocused: _physicalFocusNode.hasPrimaryFocus, inputModel: inputModel);
+  bool _padIsOn(PadButton b) {
+    switch (b.appAction) {
+      case PadAppAction.toggleTwoFinger:
+        return isTwoFingerRightDragMode();
+      case PadAppAction.blockInput:
+        return BlockInputState.find(widget.id).value;
+      case PadAppAction.recording:
+        return gFFI.recordingModel.start;
+      case PadAppAction.showRemoteCursor:
+        return ShowRemoteCursorState.find(widget.id).value;
+      case PadAppAction.mute:
+        return bind.sessionGetToggleOptionSync(
+            sessionId: sessionId, arg: 'disable-audio');
+      case PadAppAction.privacyMode:
+        return PrivacyModeState.find(widget.id).isNotEmpty;
+      case PadAppAction.lockCanvas:
+        return gFFI.canvasModel.locked;
+      case PadAppAction.toggleTouchMode:
+        return gFFI.ffiModel.touchMode;
+      default:
+        return false;
+    }
+  }
+
+  void _togglePadOption(String option, void Function(bool value) apply) {
+    bind.sessionToggleOption(sessionId: sessionId, value: option).then((_) {
+      if (!mounted) return;
+      apply(bind.sessionGetToggleOptionSync(sessionId: sessionId, arg: option));
+      setState(() {});
+    });
+  }
+
+  Future<void> _sendClipboardKeystrokes() async {
+    final data = await Clipboard.getData(Clipboard.kTextPlain);
+    final text = data?.text;
+    if (text == null || text.isEmpty) return;
+    await bind.sessionInputString(sessionId: sessionId, value: text);
+  }
+
+  void _onControlPadPress(PadButton b, bool down) {
+    if (!down) return;
+    switch (b.actionKind) {
+      case PadActionKind.appAction:
+        switch (b.appAction) {
+          case PadAppAction.menu:
+            break;
+          case PadAppAction.sendText:
+            final ffiModel = gFFI.ffiModel;
+            if (isWeb ||
+                ffiModel.pi.displays.isEmpty ||
+                ffiModel.viewOnly ||
+                !ffiModel.keyboard) {
+              return;
+            }
+            handleSendTextAsKeystrokes(widget.id, gFFI);
+            break;
+          case PadAppAction.toggleTwoFinger:
+            setTwoFingerMode(isTwoFingerRightDragMode()
+                ? TwoFingerMode.canvas
+                : TwoFingerMode.rightDrag);
+            break;
+          case PadAppAction.keyboard:
+            openKeyboard();
+            break;
+          case PadAppAction.gestureHelp:
+            setState(() => _showGestureHelp = true);
+            break;
+          case PadAppAction.toggleTouchMode:
+            gFFI.ffiModel.toggleTouchMode();
+            if (gFFI.ffiModel.touchMode) {
+              gFFI.inputModel.setRelativeMouseMode(false);
+            }
+            final touch = gFFI.ffiModel.touchMode ? 'Y' : 'N';
+            bind.mainSetLocalOption(key: kOptionTouchMode, value: touch);
+            setState(() {});
+            break;
+          case PadAppAction.chat:
+            onPressedTextChat(widget.id);
+            break;
+          case PadAppAction.displays:
+            setState(() => _showEdit = false);
+            showOptions(context, widget.id, gFFI.dialogManager);
+            break;
+          case PadAppAction.disconnect:
+            clientClose(sessionId, gFFI);
+            break;
+          case PadAppAction.more:
+            setState(() => _showEdit = false);
+            showActions(widget.id);
+            break;
+          case PadAppAction.resetCanvas:
+            gFFI.cursorModel.reset();
+            break;
+          case PadAppAction.sendClipboard:
+            _sendClipboardKeystrokes();
+            break;
+          case PadAppAction.refresh:
+            sessionRefreshVideo(sessionId, gFFI.ffiModel.pi);
+            break;
+          case PadAppAction.ctrlAltDel:
+            bind.sessionCtrlAltDel(sessionId: sessionId);
+            break;
+          case PadAppAction.lock:
+            bind.sessionLockScreen(sessionId: sessionId);
+            break;
+          case PadAppAction.osPassword:
+            handleOsPasswordAction(sessionId, gFFI.dialogManager);
+            break;
+          case PadAppAction.elevation:
+            showRequestElevationDialog(sessionId, gFFI.dialogManager);
+            break;
+          case PadAppAction.fingerprint:
+            onCopyFingerprint(FingerprintState.find(widget.id).value);
+            break;
+          case PadAppAction.blockInput:
+            final blockInput = BlockInputState.find(widget.id);
+            bind.sessionToggleOption(
+                sessionId: sessionId,
+                value: '${blockInput.value ? 'un' : ''}block-input');
+            blockInput.value = !blockInput.value;
+            break;
+          case PadAppAction.recording:
+            gFFI.recordingModel.toggle();
+            setState(() {});
+            break;
+          case PadAppAction.showRemoteCursor:
+            _togglePadOption('show-remote-cursor', (value) {
+              ShowRemoteCursorState.find(widget.id).value = value;
+            });
+            break;
+          case PadAppAction.mute:
+            _togglePadOption('disable-audio', (_) => setState(() {}));
+            break;
+          case PadAppAction.privacyMode:
+            final privacy = PrivacyModeState.find(widget.id);
+            final menus =
+                toolbarPrivacyMode(privacy, context, widget.id, gFFI);
+            if (menus.isNotEmpty) menus.first.onChanged?.call(privacy.isEmpty);
+            break;
+          case PadAppAction.lockCanvas:
+            gFFI.canvasModel.setLocked(!gFFI.canvasModel.locked);
+            setState(() {});
+            break;
+          case null:
+            break;
+        }
+        break;
+      case PadActionKind.key:
+        final name = _padKeyName(b.payload);
+        if (name != null) inputModel.inputKey(name);
+        break;
+      case PadActionKind.combo:
+        final parts = b.comboParts
+            .map((p) => p.trim().toLowerCase())
+            .where((p) => p.isNotEmpty)
+            .toList();
+        if (parts.isEmpty) return;
+        final key = _padKeyName(parts.last);
+        if (key == null) return;
+        final mods = parts.sublist(0, parts.length - 1).toSet();
+        bind.sessionInputKey(
+          sessionId: sessionId,
+          name: key,
+          down: false,
+          press: true,
+          alt: mods.contains('alt') || mods.contains('option'),
+          ctrl: mods.contains('ctrl') || mods.contains('control'),
+          shift: mods.contains('shift'),
+          command: mods.contains('cmd') ||
+              mods.contains('command') ||
+              mods.contains('meta') ||
+              mods.contains('win'),
+        );
+        break;
+    }
+  }
+
+  String? _padKeyName(String raw) {
+    final s = raw.trim();
+    if (s.isEmpty) return null;
+    if (s.toUpperCase().startsWith('VK_')) return s.toUpperCase();
+    switch (s.toLowerCase()) {
+      case 'esc':
+      case 'escape':
+        return 'VK_ESCAPE';
+      case 'tab':
+        return 'VK_TAB';
+      case 'enter':
+      case 'return':
+        return 'VK_RETURN';
+      case 'space':
+        return 'VK_SPACE';
+      case 'del':
+      case 'delete':
+        return 'VK_DELETE';
+      case 'backspace':
+        return 'VK_BACK';
+      default:
+        if (RegExp(r'^f([1-9]|1[0-2])$', caseSensitive: false).hasMatch(s)) {
+          return 'VK_${s.toUpperCase()}';
+        }
+        if (s.length == 1) return 'VK_${s.toUpperCase()}';
+        return null;
+    }
+  }
 
   Widget getRawPointerAndKeyBody(Widget child) {
     final ffiModel = Provider.of<FfiModel>(context);
@@ -722,12 +962,22 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                       (_showEdit || chatKeyboardRequested),
                   showGestureHelp: _showGestureHelp);
             }),
-            SizedBox(
-              width: 0,
-              height: 0,
+            Positioned(
+              left: 0,
+              right: 0,
+              bottom: 0,
+              height: 1,
               child: !_showEdit
-                  ? Container()
+                  ? const SizedBox.shrink()
                   : TextFormField(
+                      style: const TextStyle(
+                          color: Colors.transparent, fontSize: 1, height: 1),
+                      decoration: const InputDecoration(
+                        border: InputBorder.none,
+                        isCollapsed: true,
+                        contentPadding: EdgeInsets.zero,
+                      ),
+                      cursorWidth: 0,
                       textInputAction: TextInputAction.newline,
                       autocorrect: false,
                       // Flutter 3.16.9 Android.

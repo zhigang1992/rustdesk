@@ -815,5 +815,9 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("Off", "끔"),
         ("api_server_connection_tip", "사용 중인 맞춤형 서버가 암호화되지 않은 HTTP를 사용합니다. HTTPS를 사용하도록 관리자에게 문의하세요."),
         ("api_server_empty_tip", "API 서버가 비어 있으면 사용자 지정 서버는 기본적으로 HTTP로 설정됩니다. HTTPS를 사용하도록 관리자에게 문의하세요."),
+        ("Send text as keystrokes", "텍스트를 키 입력으로 보내기"),
+        ("send-text-as-keystrokes-tip", "여기에 입력하거나 받아쓰기를 사용하세요. Enter 를 눌러 전송합니다."),
+        ("send-text-as-keystrokes-mobile-tip", "여기에 입력하거나 받아쓰기를 사용하세요. Enter 를 누르거나 전송을 탭하세요."),
+        ("Also send Enter key", "Enter 키도 함께 보내기"),
     ].iter().cloned().collect();
 }

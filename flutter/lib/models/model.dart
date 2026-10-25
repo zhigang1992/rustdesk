@@ -475,6 +475,8 @@ class FfiModel with ChangeNotifier {
         if (action is String) {
           parent.target?.shortcutModel.onTriggered(action);
         }
+      } else if (name == 'show_keystroke_input') {
+        parent.target?.inputModel.requestSendTextAsKeystrokes();
       } else {
         debugPrint('Event is not handled in the fixed branch: $name');
       }

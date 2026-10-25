@@ -815,5 +815,10 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("Off", "Desativado"),
         ("api_server_connection_tip", ""),
         ("api_server_empty_tip", ""),
+        ("To start a voice call, enable \"Audio capture\" on the \"Share screen\" page.", "Para iniciar uma chamada de voz, ative \"Captura de áudio\" na página \"Compartilhar Tela\"."),
+        ("Send text as keystrokes", ""),
+        ("send-text-as-keystrokes-tip", ""),
+        ("send-text-as-keystrokes-mobile-tip", ""),
+        ("Also send Enter key", ""),
     ].iter().cloned().collect();
 }

@@ -815,5 +815,9 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("Off", ""),
         ("api_server_connection_tip", "自訂伺服器正在使用未加密的 HTTP。請聯絡管理員啟用 HTTPS。"),
         ("api_server_empty_tip", "API 伺服器留空時，自訂伺服器預設使用 HTTP。請聯絡管理員啟用 HTTPS。"),
+        ("Send text as keystrokes", "傳送文字按鍵"),
+        ("send-text-as-keystrokes-tip", "在此輸入或使用聽寫。按 Enter 傳送。"),
+        ("send-text-as-keystrokes-mobile-tip", "在此輸入或使用聽寫。按 Enter 或點選傳送。"),
+        ("Also send Enter key", "同時傳送 Enter 鍵"),
     ].iter().cloned().collect();
 }

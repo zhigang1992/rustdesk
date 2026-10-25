@@ -1128,6 +1128,13 @@ fn process_software_update_check_response(bytes: Bytes) -> ResultType<()> {
 
 // No need to check `danger_accept_invalid_cert` for now.
 // Because the url is always `https://api.rustdesk.com/version/latest`.
+#[cfg(target_os = "macos")]
+#[tokio::main(flavor = "current_thread")]
+pub async fn do_check_software_update() -> hbb_common::ResultType<()> {
+    Ok(())
+}
+
+#[cfg(not(target_os = "macos"))]
 #[tokio::main(flavor = "current_thread")]
 pub async fn do_check_software_update() -> hbb_common::ResultType<()> {
     let (request, url) =

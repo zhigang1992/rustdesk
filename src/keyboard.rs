@@ -49,6 +49,11 @@ static EXIT_SHORTCUT_KEY_DOWN: AtomicBool = AtomicBool::new(false);
 #[cfg(all(feature = "flutter", any(target_os = "windows", target_os = "macos", target_os = "linux")))]
 static RELATIVE_MOUSE_MODE_ACTIVE: AtomicBool = AtomicBool::new(false);
 
+// Track KeyK down for the host "send text as keystrokes" shortcut so key-up
+// is also swallowed and not delivered to the remote.
+#[cfg(all(feature = "flutter", any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+static SEND_TEXT_SHORTCUT_KEY_DOWN: AtomicBool = AtomicBool::new(false);
+
 /// Set the relative mouse mode state from Flutter.
 /// This is called when entering or exiting relative mouse mode.
 #[cfg(all(feature = "flutter", any(target_os = "windows", target_os = "macos", target_os = "linux")))]
@@ -663,6 +668,80 @@ fn should_block_relative_mouse_shortcut(key: Key, is_press: bool) -> bool {
     false
 }
 
+#[cfg(feature = "flutter")]
+#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
+fn is_send_text_shortcut(key: Key) -> bool {
+    if key != Key::KeyK {
+        return false;
+    }
+    let modifiers = MODIFIERS_STATE.lock().unwrap();
+    let shift = *modifiers.get(&Key::ShiftLeft).unwrap_or(&false)
+        || *modifiers.get(&Key::ShiftRight).unwrap_or(&false);
+    let meta = *modifiers.get(&Key::MetaLeft).unwrap_or(&false)
+        || *modifiers.get(&Key::MetaRight).unwrap_or(&false);
+    let ctrl = *modifiers.get(&Key::ControlLeft).unwrap_or(&false)
+        || *modifiers.get(&Key::ControlRight).unwrap_or(&false);
+    let alt = *modifiers.get(&Key::Alt).unwrap_or(&false)
+        || *modifiers.get(&Key::AltGr).unwrap_or(&false);
+    if !shift || alt {
+        return false;
+    }
+    #[cfg(target_os = "macos")]
+    {
+        meta && !ctrl
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        ctrl && !meta
+    }
+}
+
+#[cfg(feature = "flutter")]
+#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
+fn notify_show_keystroke_input() {
+    let session_id = flutter::get_cur_session_id();
+    flutter::push_session_event(&session_id, "show_keystroke_input", vec![]);
+}
+
+#[cfg(feature = "flutter")]
+#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
+fn can_show_keystroke_input_from_grab_loop() -> bool {
+    let Some(session) = flutter::get_cur_session() else {
+        return false;
+    };
+    if !session.is_default() {
+        return false;
+    }
+    if !*session.server_keyboard_enabled.read().unwrap() {
+        return false;
+    }
+    let lc = session.lc.read().unwrap();
+    !lc.view_only.v
+}
+
+#[cfg(feature = "flutter")]
+#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
+#[inline]
+fn should_block_send_text_shortcut(key: Key, is_press: bool) -> bool {
+    if !KEYBOARD_HOOKED.load(Ordering::SeqCst) {
+        return false;
+    }
+    let is_tracked_key = key == Key::KeyK;
+    if is_tracked_key && !is_press && SEND_TEXT_SHORTCUT_KEY_DOWN.swap(false, Ordering::SeqCst) {
+        return true;
+    }
+    if !is_send_text_shortcut(key) {
+        return false;
+    }
+    if !can_show_keystroke_input_from_grab_loop() {
+        return false;
+    }
+    if is_press && !SEND_TEXT_SHORTCUT_KEY_DOWN.swap(true, Ordering::SeqCst) {
+        notify_show_keystroke_input();
+    }
+    true
+}
+
 fn start_grab_loop() {
     std::env::set_var("KEYBOARD_ONLY", "y");
     #[cfg(any(target_os = "windows", target_os = "macos"))]
@@ -678,6 +757,10 @@ fn start_grab_loop() {
 
             #[cfg(feature = "flutter")]
             if should_block_relative_mouse_shortcut(key, is_press) {
+                return None;
+            }
+            #[cfg(feature = "flutter")]
+            if should_block_send_text_shortcut(key, is_press) {
                 return None;
             }
 
@@ -746,6 +829,10 @@ fn start_grab_loop() {
             } else {
                 #[cfg(feature = "flutter")]
                 if should_block_relative_mouse_shortcut(key, is_press) {
+                    return None;
+                }
+                #[cfg(feature = "flutter")]
+                if should_block_send_text_shortcut(key, is_press) {
                     return None;
                 }
                 client::process_event(&get_keyboard_mode(), &event, None);

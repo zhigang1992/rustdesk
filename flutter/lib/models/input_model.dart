@@ -477,6 +477,9 @@ class InputModel {
   late final RelativeMouseModel _relativeMouse;
   // Callback to cancel external throttle timer when relative mouse mode is disabled.
   VoidCallback? onRelativeMouseModeDisabled;
+  Future<void> Function()? onRequestSendTextAsKeystrokes;
+  bool _sendTextShortcutKeyDown = false;
+  bool _keystrokeInputOpen = false;
   // Disposer for the relativeMouseMode observer (to prevent memory leaks).
   Worker? _relativeMouseModeDisposer;
 
@@ -755,6 +758,7 @@ class InputModel {
       return KeyEventResult.handled;
     }
     if (isViewCamera) return KeyEventResult.handled;
+    if (_keystrokeInputOpen) return KeyEventResult.handled;
     if (!isInputSourceFlutter) {
       if (isDesktop) {
         return KeyEventResult.handled;
@@ -763,6 +767,7 @@ class InputModel {
       }
     }
     _syncFlutterShortcutModifiersAfterViewOnly(e.physicalKey, raw: true);
+    if (_tryHandleSendTextShortcutRaw(e)) return KeyEventResult.handled;
 
     if (_relativeMouse.handleRawKeyEvent(e)) {
       return KeyEventResult.handled;
@@ -851,6 +856,7 @@ class InputModel {
       return KeyEventResult.handled;
     }
     if (isViewCamera) return KeyEventResult.handled;
+    if (_keystrokeInputOpen) return KeyEventResult.handled;
     if (!isInputSourceFlutter) {
       if (isDesktop) {
         return KeyEventResult.handled;
@@ -859,6 +865,7 @@ class InputModel {
       }
     }
     _syncFlutterShortcutModifiersAfterViewOnly(e.physicalKey);
+    if (_tryHandleSendTextShortcut(e)) return KeyEventResult.handled;
     if (isWeb && _tryDispatchFlutterShortcut(e)) {
       return KeyEventResult.handled;
     }
@@ -1544,6 +1551,97 @@ class InputModel {
   /// This is called when the user presses the exit shortcut (Ctrl+Alt on Win/Linux, Cmd+G on macOS).
   /// We need to send key-up events for all modifiers because the shortcut itself may have
   /// blocked some key events, leaving the remote in a state where modifiers are stuck.
+  bool _isSendTextAsKeystrokesShortcut({
+    required LogicalKeyboardKey key,
+    required bool meta,
+    required bool control,
+    required bool shiftPressed,
+    required bool altPressed,
+  }) {
+    if (key != LogicalKeyboardKey.keyK) return false;
+    if (!shiftPressed || altPressed) return false;
+    if (isMacOS) return meta && !control;
+    return control && !meta;
+  }
+
+  bool _tryHandleSendTextShortcut(KeyEvent e) {
+    if (!isDesktop || isViewCamera || !keyboardPerm) return false;
+    final isK = e.logicalKey == LogicalKeyboardKey.keyK;
+    if (e is KeyUpEvent && _sendTextShortcutKeyDown && isK) {
+      _sendTextShortcutKeyDown = false;
+      return true;
+    }
+    if (e is! KeyDownEvent) return false;
+    if (!_isSendTextAsKeystrokesShortcut(
+      key: e.logicalKey,
+      meta: HardwareKeyboard.instance.isMetaPressed || command,
+      control: HardwareKeyboard.instance.isControlPressed || ctrl,
+      shiftPressed: HardwareKeyboard.instance.isShiftPressed || shift,
+      altPressed: HardwareKeyboard.instance.isAltPressed || alt,
+    )) {
+      return false;
+    }
+    _sendTextShortcutKeyDown = true;
+    requestSendTextAsKeystrokes();
+    return true;
+  }
+
+  bool _tryHandleSendTextShortcutRaw(RawKeyEvent e) {
+    if (!isDesktop || isViewCamera || !keyboardPerm) return false;
+    final isK = e.logicalKey == LogicalKeyboardKey.keyK;
+    if (e is RawKeyUpEvent && _sendTextShortcutKeyDown && isK) {
+      _sendTextShortcutKeyDown = false;
+      return true;
+    }
+    if (e is! RawKeyDownEvent) return false;
+    if (!_isSendTextAsKeystrokesShortcut(
+      key: e.logicalKey,
+      meta: e.isMetaPressed || command,
+      control: e.isControlPressed || ctrl,
+      shiftPressed: e.isShiftPressed || shift,
+      altPressed: e.isAltPressed || alt,
+    )) {
+      return false;
+    }
+    _sendTextShortcutKeyDown = true;
+    requestSendTextAsKeystrokes();
+    return true;
+  }
+
+  void releaseModifiersOnRemote() {
+    const modifiersToRelease = [
+      'Control_L',
+      'Control_R',
+      'Alt_L',
+      'Alt_R',
+      'Shift_L',
+      'Shift_R',
+      'Meta_L',
+      'Meta_R',
+    ];
+    for (final key in modifiersToRelease) {
+      bind.sessionInputKey(
+        sessionId: sessionId,
+        name: key,
+        down: false,
+        press: false,
+        alt: false,
+        ctrl: false,
+        shift: false,
+        command: false,
+      );
+    }
+    resetModifiers();
+  }
+
+  void requestSendTextAsKeystrokes() {
+    final cb = onRequestSendTextAsKeystrokes;
+    if (cb == null || _keystrokeInputOpen) return;
+    _keystrokeInputOpen = true;
+    releaseModifiersOnRemote();
+    unawaited(cb().whenComplete(() => _keystrokeInputOpen = false));
+  }
+
   void exitRelativeMouseModeWithKeyRelease() {
     if (!_relativeMouse.enabled.value) return;
 

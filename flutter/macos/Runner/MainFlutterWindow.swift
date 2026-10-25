@@ -308,9 +308,328 @@ class MainFlutterWindow: NSWindow {
                     }
                     result([Double(size.width), Double(size.height)])
 
+                case "showKeystrokeInput":
+                    var title = "Send text as keystrokes"
+                    var send = "Send"
+                    var cancel = "Cancel"
+                    var hint = ""
+                    var appendEnterLabel = "Also send Enter key"
+                    var appendEnter = false
+                    if let arg = call.arguments as? [String: Any] {
+                        title = (arg["title"] as? String) ?? title
+                        send = (arg["send"] as? String) ?? send
+                        cancel = (arg["cancel"] as? String) ?? cancel
+                        hint = (arg["hint"] as? String) ?? hint
+                        appendEnterLabel = (arg["appendEnterLabel"] as? String) ?? appendEnterLabel
+                        appendEnter = (arg["appendEnter"] as? Bool) ?? appendEnter
+                    }
+                    KeystrokeInputPanel.present(
+                        title: title,
+                        sendTitle: send,
+                        cancelTitle: cancel,
+                        hint: hint,
+                        appendEnterLabel: appendEnterLabel,
+                        appendEnter: appendEnter,
+                        completion: { payload in
+                            result(payload)
+                        }
+                    )
+
                 default:
                     result(FlutterMethodNotImplemented)
                 }
         })
+    }
+}
+
+/// Host-side field so dictation / IME run on macOS, not the remote.
+/// The field grows with wrapped text, up to ten lines, then scrolls.
+private class KeystrokeInputPanel: NSObject, NSWindowDelegate, NSTextViewDelegate {
+    static var current: KeystrokeInputPanel?
+
+    private let panel: NSPanel
+    private let scrollView: NSScrollView
+    private let textView: NSTextView
+    private let hintField: NSTextField?
+    private let appendEnterCheckbox: NSButton
+    private let minFieldHeight: CGFloat
+    private let maxFieldHeight: CGFloat
+    private let fieldY: CGFloat
+    private let gap: CGFloat = 8
+    private let topPad: CGFloat = 16
+    private let hintHeight: CGFloat
+    private var completion: (([String: Any]?) -> Void)?
+    private var eventMonitor: Any?
+    private var finished = false
+
+    private init(
+        title: String,
+        sendTitle: String,
+        cancelTitle: String,
+        hint: String,
+        appendEnterLabel: String,
+        appendEnter: Bool,
+        completion: @escaping ([String: Any]?) -> Void
+    ) {
+        self.completion = completion
+
+        let width: CGFloat = 480
+        let buttonHeight: CGFloat = 32
+        let checkboxHeight: CGFloat = 18
+        let hintHeight: CGFloat = hint.isEmpty ? 0 : 32
+        let topPad: CGFloat = 16
+        let gap: CGFloat = 8
+        let bottomPad: CGFloat = 16
+        let font = NSFont.systemFont(ofSize: 14)
+        let lineHeight = NSLayoutManager().defaultLineHeight(for: font)
+        let fieldPad: CGFloat = 8
+        let minFieldHeight = ceil(lineHeight + fieldPad)
+        let maxFieldHeight = ceil(lineHeight * 10 + fieldPad)
+        self.minFieldHeight = minFieldHeight
+        self.maxFieldHeight = maxFieldHeight
+        self.hintHeight = hintHeight
+        let fieldY = bottomPad + buttonHeight + gap + checkboxHeight + gap
+        self.fieldY = fieldY
+        let height = fieldY + minFieldHeight + (hint.isEmpty ? 0 : gap) + hintHeight + topPad
+
+        panel = NSPanel(
+            contentRect: NSRect(x: 0, y: 0, width: width, height: height),
+            styleMask: [.titled, .closable],
+            backing: .buffered,
+            defer: false
+        )
+        panel.title = title
+        panel.isFloatingPanel = true
+        panel.level = .floating
+        panel.hidesOnDeactivate = false
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        panel.isReleasedWhenClosed = false
+
+        let content = NSView(frame: NSRect(x: 0, y: 0, width: width, height: height))
+        panel.contentView = content
+
+        if hint.isEmpty {
+            hintField = nil
+        } else {
+            let hintField = NSTextField(labelWithString: hint)
+            hintField.font = NSFont.systemFont(ofSize: 12)
+            hintField.textColor = .secondaryLabelColor
+            hintField.lineBreakMode = .byWordWrapping
+            hintField.maximumNumberOfLines = 2
+            hintField.frame = NSRect(
+                x: 16,
+                y: fieldY + minFieldHeight + gap,
+                width: width - 32,
+                height: hintHeight
+            )
+            content.addSubview(hintField)
+            self.hintField = hintField
+        }
+
+        textView = NSTextView()
+        textView.font = font
+        textView.textColor = .textColor
+        textView.backgroundColor = .textBackgroundColor
+        textView.insertionPointColor = .textColor
+        textView.isRichText = false
+        textView.isEditable = true
+        textView.isSelectable = true
+        textView.allowsUndo = true
+        textView.isAutomaticQuoteSubstitutionEnabled = false
+        textView.isAutomaticDashSubstitutionEnabled = false
+        textView.isAutomaticDataDetectionEnabled = false
+        textView.isAutomaticLinkDetectionEnabled = false
+        textView.isAutomaticTextReplacementEnabled = false
+        textView.isAutomaticSpellingCorrectionEnabled = false
+        textView.isContinuousSpellCheckingEnabled = false
+        textView.isGrammarCheckingEnabled = false
+        textView.textContainerInset = NSSize(width: 2, height: 2)
+        textView.isVerticallyResizable = true
+        textView.isHorizontallyResizable = false
+        textView.textContainer?.widthTracksTextView = true
+        textView.textContainer?.heightTracksTextView = false
+        textView.minSize = NSSize(width: 0, height: minFieldHeight)
+        textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+        let fieldWidth = width - 32
+        textView.frame = NSRect(x: 0, y: 0, width: fieldWidth, height: minFieldHeight)
+
+        scrollView = NSScrollView(frame: NSRect(x: 16, y: fieldY, width: fieldWidth, height: minFieldHeight))
+        scrollView.borderType = .bezelBorder
+        scrollView.hasVerticalScroller = true
+        scrollView.autohidesScrollers = true
+        scrollView.hasHorizontalScroller = false
+        scrollView.drawsBackground = true
+        scrollView.documentView = textView
+        content.addSubview(scrollView)
+
+        appendEnterCheckbox = NSButton(
+            checkboxWithTitle: appendEnterLabel,
+            target: nil,
+            action: nil
+        )
+        appendEnterCheckbox.frame = NSRect(
+            x: 16,
+            y: bottomPad + buttonHeight + gap,
+            width: width - 32,
+            height: checkboxHeight
+        )
+        appendEnterCheckbox.state = appendEnter ? .on : .off
+        content.addSubview(appendEnterCheckbox)
+
+        let sendButton = NSButton(title: sendTitle, target: nil, action: nil)
+        sendButton.bezelStyle = .rounded
+        sendButton.keyEquivalent = "\r"
+        let cancelButton = NSButton(title: cancelTitle, target: nil, action: nil)
+        cancelButton.bezelStyle = .rounded
+        cancelButton.keyEquivalent = "\u{1b}"
+
+        let sendSize = sendButton.fittingSize
+        let cancelSize = cancelButton.fittingSize
+        let sendWidth = max(sendSize.width, 80)
+        let cancelWidth = max(cancelSize.width, 80)
+        sendButton.frame = NSRect(x: width - 16 - sendWidth, y: bottomPad, width: sendWidth, height: buttonHeight)
+        cancelButton.frame = NSRect(
+            x: width - 16 - sendWidth - 12 - cancelWidth,
+            y: bottomPad,
+            width: cancelWidth,
+            height: buttonHeight
+        )
+        content.addSubview(sendButton)
+        content.addSubview(cancelButton)
+
+        super.init()
+
+        textView.delegate = self
+        sendButton.target = self
+        sendButton.action = #selector(send)
+        cancelButton.target = self
+        cancelButton.action = #selector(cancel)
+        panel.delegate = self
+
+        if let screen = NSScreen.main ?? NSScreen.screens.first {
+            let visible = screen.visibleFrame
+            panel.setFrameOrigin(NSPoint(
+                x: visible.midX - width / 2,
+                y: visible.midY - height / 2
+            ))
+        }
+
+        eventMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let self = self, event.window == self.panel else { return event }
+            if event.keyCode == 53 {
+                self.cancel()
+                return nil
+            }
+            return event
+        }
+    }
+
+    static func present(
+        title: String,
+        sendTitle: String,
+        cancelTitle: String,
+        hint: String,
+        appendEnterLabel: String,
+        appendEnter: Bool,
+        completion: @escaping ([String: Any]?) -> Void
+    ) {
+        assert(Thread.isMainThread, "showKeystrokeInput must be called on the main thread")
+        if let existing = current {
+            existing.panel.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            completion(nil)
+            return
+        }
+
+        let controller = KeystrokeInputPanel(
+            title: title,
+            sendTitle: sendTitle,
+            cancelTitle: cancelTitle,
+            hint: hint,
+            appendEnterLabel: appendEnterLabel,
+            appendEnter: appendEnter,
+            completion: completion
+        )
+        current = controller
+        NSApp.activate(ignoringOtherApps: true)
+        controller.panel.makeKeyAndOrderFront(nil)
+        controller.resizeField()
+        controller.panel.makeFirstResponder(controller.textView)
+    }
+
+    func textDidChange(_ notification: Notification) {
+        resizeField()
+    }
+
+    func textView(_ textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+        if commandSelector == #selector(NSResponder.insertNewline(_:)) {
+            send()
+            return true
+        }
+        return false
+    }
+
+    /// Grow the panel with wrapped text. The bottom edge stays put.
+    private func resizeField() {
+        guard let container = textView.textContainer,
+              let layout = textView.layoutManager else { return }
+        let clipWidth = scrollView.contentSize.width
+        if clipWidth > 1 {
+            container.containerSize = NSSize(
+                width: max(clipWidth - textView.textContainerInset.width * 2, 1),
+                height: CGFloat.greatestFiniteMagnitude
+            )
+            textView.frame.size.width = clipWidth
+        }
+        layout.ensureLayout(for: container)
+        let used = layout.usedRect(for: container)
+        let contentHeight = ceil(used.height + textView.textContainerInset.height * 2)
+        let fieldHeight = min(max(contentHeight, minFieldHeight), maxFieldHeight)
+        let oldHeight = scrollView.frame.height
+        textView.frame.size.height = max(contentHeight, minFieldHeight)
+        guard abs(oldHeight - fieldHeight) >= 0.5 else {
+            textView.scrollRangeToVisible(textView.selectedRange())
+            return
+        }
+
+        scrollView.frame.size.height = fieldHeight
+        scrollView.frame.origin.y = fieldY
+        if hintHeight > 0 {
+            hintField?.frame.origin.y = scrollView.frame.maxY + gap
+        }
+        var frame = panel.frame
+        frame.size.height += fieldHeight - oldHeight
+        panel.setFrame(frame, display: true)
+        textView.scrollRangeToVisible(textView.selectedRange())
+    }
+
+    @objc private func send() {
+        finish([
+            "text": textView.string,
+            "appendEnter": appendEnterCheckbox.state == .on,
+        ])
+    }
+
+    @objc private func cancel() {
+        finish(nil)
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        finish(nil)
+    }
+
+    private func finish(_ payload: [String: Any]?) {
+        guard !finished else { return }
+        finished = true
+        if let monitor = eventMonitor {
+            NSEvent.removeMonitor(monitor)
+            eventMonitor = nil
+        }
+        completion?(payload)
+        completion = nil
+        panel.orderOut(nil)
+        if KeystrokeInputPanel.current === self {
+            KeystrokeInputPanel.current = nil
+        }
     }
 }

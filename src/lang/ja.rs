@@ -815,5 +815,9 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("Off", ""),
         ("api_server_connection_tip", ""),
         ("api_server_empty_tip", ""),
+        ("Send text as keystrokes", "テキストをキー入力として送信"),
+        ("send-text-as-keystrokes-tip", "ここに入力または音声入力してください。Enter で送信します。"),
+        ("send-text-as-keystrokes-mobile-tip", "ここに入力または音声入力してください。Enter または送信をタップします。"),
+        ("Also send Enter key", "Enter キーも送信する"),
     ].iter().cloned().collect();
 }
