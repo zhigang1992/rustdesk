@@ -56,10 +56,6 @@ impl BrowserClient {
         )
         .await?;
         handler.update_direct(Some(direct));
-        // A browser carries reusable website credentials, so an unencrypted transport is unavailable.
-        if !stream.is_secured() {
-            bail!("Remote browser requires an encrypted RustDesk connection");
-        }
         let _keep_it = hc_connection(feedback, server, token).await;
         let mut pending_login = None;
         let mut challenged = false;
