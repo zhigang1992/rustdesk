@@ -444,6 +444,7 @@
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.carriez.flutterHbb;
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				RUSTDESK_DISPLAY_NAME = "RustDesk";
 				STRIP_STYLE = "non-global";
 				SWIFT_OBJC_BRIDGING_HEADER = "Runner/Runner-Bridging-Header.h";
 				SWIFT_VERSION = 5.0;
@@ -638,8 +639,9 @@
 					"-framework",
 					"\"wakelock_plus\"",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.carriez.flutterHbb;
+				PRODUCT_BUNDLE_IDENTIFIER = app.reily.rustdesk.dev;
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				RUSTDESK_DISPLAY_NAME = "RustDesk Dev";
 				STRIP_STYLE = "non-global";
 				SWIFT_OBJC_BRIDGING_HEADER = "Runner/Runner-Bridging-Header.h";
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
@@ -728,6 +730,7 @@
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.carriez.flutterHbb;
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				RUSTDESK_DISPLAY_NAME = "RustDesk";
 				STRIP_STYLE = "non-global";
 				SWIFT_OBJC_BRIDGING_HEADER = "Runner/Runner-Bridging-Header.h";
 				SWIFT_VERSION = 5.0;
