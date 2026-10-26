@@ -1,0 +1,117 @@
+# Option A iOS browser workspace implementation
+
+Application source commit: `17997209f252801368e5ed9256d5a62ad5d7ff2e`, based on `bb1a75cb1` on the Remote-Browser branch. This report records implementation and local validation; physical-device acceptance remains with the coordinator.
+
+## Delivered behavior
+
+- Dev-only, persisted iOS/iPadOS opt-in on Connections: **Browser workspace preview**. Opted-in startup enters the last selected computer workspace. Release and unsupported iOS versions retain the existing paths.
+- One responsive toolbar with the selected website address and computer picker, inactive title/close tabs when space permits, Back/Forward, reload/stop, New tab, bookmarks, overview and secondary menu actions. Compact phones use the overview for other tabs.
+- New tab page with per-computer favorites/bookmarks, recent pages, Add/Switch computer, Connect/Reconnect and Open desktop. Connection failures remain visible even on blank tabs.
+- Dedicated browser FFI/tunnel owner retained outside route lifetime. Explicit disconnect stops WebKit loads and the browser tunnel while retaining website views, saved metadata and cookies. Reconnect updates the existing profile's SOCKS endpoint without direct-network failover.
+- Native WKWebViews embedded through the existing Flutter engine's platform-view registrar. WebKit owns navigation and popup configurations. Website views and live Back/Forward survive workspace/tab switches; Flutter receives presentation state, not a second navigation stack.
+- A retained Flutter RemotePage Desktop tab using the existing Control Pad, keyboard and touch implementation. Hiding it releases keys/modifiers/mouse buttons, mouse listening and focus, unmounts input/gesture widgets, and gates deferred touch actions. Closing Desktop ends only screen sharing. Closing websites preserves Desktop; the last website close leaves a blank tab.
+- One live Desktop across the app. Existing iOS desktop entry routes enter this shell when opted in. A second host requires an explicit End and open confirmation and waits for the old gFFI teardown before constructing the replacement.
+- Existing browser deep links select their requested computer and open a website there. Address submission navigates the selected website, including after reconnect. Desktop entry retains its requested peer and authentication options.
+- Browser authentication/error close actions use an explicit browser operation owner; they do not end an unrelated retained Desktop or pop the shell.
+
+## Persistence and migration
+
+`profileID(for: peerIdentity)` is unchanged, including its `rustdesk.remote-browser.v1\0` SHA256 input. Existing `remote-browser.tabs.<profile UUID>`, `remote-browser.bookmarks.<profile UUID>` and `remote-browser.desktop.<profile UUID>` mappings and `SavedTabs {urls, selected}` encoding remain unchanged. The original reader restores old saved tabs/bookmarks into embedded workspaces on first authenticated connection; no cookie store is reset or replaced.
+
+New metadata is additive: `remote-browser.workspaces.v1` stores saved computers, last workspace, website selection/URLs/titles, bookmarks and recents for presentation before connection; recents also use the existing native tab key plus `.recents`. Offline tab close/selection/new-blank changes write the original native SavedTabs encoding under the saved peer identity. Native tab IDs identify live views only and do not replace profile IDs. Native commands reject stale tab IDs and an existing workspace's identity change, rather than rerouting another host's views.
+
+No SOCKS credentials, browser endpoint credentials or desktop passwords are serialized. Desktop sessions and live loading/navigation state are not restored after process termination. Restart restores website URLs/selection/bookmarks/data, with explicit connection when needed; it does not promise a full Back/Forward stack or reconnect Desktop automatically.
+
+## Validation
+
+All commands ran in this child workspace, using the installed `/Volumes/Users/kylefang/flutter-3.24.5` SDK. No bridge code generation, Rust rebuild, device install, host stop, GitHub push/PR, release bundle/version edit or TestFlight upload occurred.
+
+### Flutter tests
+
+From `flutter/`:
+
+```sh
+/Volumes/Users/kylefang/flutter-3.24.5/bin/flutter test --no-pub \
+  test/browser_workspace_test.dart test/remote_browser_link_test.dart \
+  test/control_pad_model_test.dart test/control_pad_overlay_test.dart \
+  test/input_modifier_utils_test.dart test/keyboard_shortcuts_test.dart
+```
+
+Result: **53 passed**, exit 0. Log: `/tmp/browser-workspace-tests.log`. The existing Control Pad tests log mock/plugin callback errors, but the suite reports all tests passed. Five added model tests cover workspace isolation/selection, website/Desktop close independence, one-Desktop enforcement, restart metadata without Desktop/credentials, and deep-link computer ownership.
+
+### Analyzer
+
+```sh
+/Volumes/Users/kylefang/flutter-3.24.5/bin/dart analyze \
+  flutter/lib/models/browser_workspace.dart \
+  flutter/lib/mobile/browser/browser_workspace_controller.dart \
+  flutter/lib/mobile/pages/browser_workspace_page.dart \
+  flutter/lib/mobile/pages/remote_browser_page.dart \
+  flutter/lib/mobile/pages/remote_page.dart \
+  flutter/lib/mobile/pages/home_page.dart \
+  flutter/lib/mobile/pages/connection_page.dart \
+  flutter/lib/common/widgets/remote_input.dart
+```
+
+Result: exit 0, no errors or warnings; deprecation/style info remains. Log: `/tmp/browser-workspace-focused-analyzer.log`. Including `flutter/lib/common.dart` returns exit 2 solely for its pre-existing unused `dart:math` import, plus info diagnostics; no errors. Full log: `/tmp/browser-workspace-analyzer.log`. The import is untouched to avoid unrelated cleanup.
+
+### Swift typecheck
+
+```sh
+xcrun swiftc -typecheck -target arm64-apple-ios13.0 \
+  -sdk "$(xcrun --sdk iphoneos --show-sdk-path)" \
+  -F /Volumes/Users/kylefang/flutter-3.24.5/bin/cache/artifacts/engine/ios/Flutter.xcframework/ios-arm64 \
+  flutter/ios/Runner/RemoteBrowserPlugin.swift \
+  flutter/ios/Runner/RemoteBrowserViewController.swift \
+  flutter/ios/Runner/RemoteBrowserLoopback.swift
+```
+
+Result: exit 0, no diagnostics. Log: `/tmp/browser-workspace-swift.log`. The platform-view composition API compiles with the pinned Flutter framework and the project's iOS 13 target. This is compile evidence, not a physical-device composition/input result.
+
+### iOS Dev builds and signed artifact
+
+Unsigned Debug build succeeded, then the signed standalone Profile Dev build succeeded from application source commit `17997209f252801368e5ed9256d5a62ad5d7ff2e`:
+
+```sh
+xcodebuild -workspace flutter/ios/Runner.xcworkspace -scheme Runner \
+  -configuration Profile -sdk iphoneos -destination 'generic/platform=iOS' \
+  -derivedDataPath /tmp/browser-workspace-profile \
+  IPHONEOS_DEPLOYMENT_TARGET=15.0 DEVELOPMENT_TEAM=7CRYNR44B3 \
+  CODE_SIGN_STYLE=Automatic \
+  PODS_ROOT=/Volumes/Users/kylefang/orca/workspaces/rustdesk/Browser-Workspace-A/flutter/ios/Pods
+```
+
+The installed Xcode 27.1 rejects the existing app iOS 13/Pods iOS 11 build targets, so the local build uses a command-line minimum override only. No project/Podfile minimum or signing change is committed. The pinned native code also typechecks at iOS 13, as shown above. A nonfatal Flutter `NSBonjourServices` plist query diagnostic appears in the successful build log.
+
+- Final build log: `/tmp/browser-workspace-profile-build.log` (`BUILD SUCCEEDED`).
+- App: `/tmp/browser-workspace-profile/Build/Products/Profile-iphoneos/Runner.app`.
+- Signing time: **2026-10-26 18:20:56 Asia/Singapore**.
+- Verified bundle: `app.reily.rustdesk.dev`; display name: `RustDesk Dev`; team: `7CRYNR44B3`; version/build unchanged: `1.5.1 (72)`.
+- `codesign --verify --deep --strict` passed.
+- Runner SHA256: `4e7f2c949af89f84a9e39db468ff2f13b6b605cde45ff9bbfeb671d487ab56a5`.
+- `Frameworks/App.framework/App` SHA256: `df33a2436190ce33902c61f4bab027e6b516f24665ed5019c90dc4ef4269af0d`.
+
+Ignored build dependencies were reused from the parent (generated Dart bridges, plugin headers, CocoaPods dependencies and prebuilt Rust static library); Pods were copied locally for builds and build-only lock/workspace edits were reverted. The parent's generated Pods manifest was left matching its original Podfile.lock. No generated bridge or build artifacts are committed.
+
+## Mandatory regression-surface/minimization review
+
+Reviewed every modified existing file and path; only the following existing paths change:
+
+| Existing file | Required behavior change and boundary |
+| --- | --- |
+| `flutter/ios/Runner/RemoteBrowserPlugin.swift` | Register platform-view factory on the same engine and route explicit workspace commands/events/settings. Existing `available`, modal `open` and `close` paths remain. |
+| `flutter/ios/Runner/RemoteBrowserViewController.swift` | Optional embedded layout, live tab IDs/state, native workspace commands/reconnect, recents and embedded visibility/dialog gating. Original profile mapping, SavedTabs/bookmark readers, routing, popup configuration, native navigation and modal chrome remain. Additional history KVO and state emission are embedded-only. |
+| `flutter/lib/common.dart` | Thin opted-in iOS desktop-entry hook and a nullable shell close hook for existing shared mobile session dialogs. Feature-off/other-platform routing and close behavior use the original implementation. |
+| `flutter/lib/common/widgets/remote_input.dart` | Optional callback on the touch region and checks at callback/queued/post-await boundaries, preventing hidden embedded gestures from sending delayed presses/moves. Null callback preserves existing behavior; no gesture algorithm/state was rewritten. |
+| `flutter/lib/mobile/pages/remote_page.dart` | Optional embedded/input visibility/close/disposal hooks. The new path retains the session state while its input subtree is hidden; teardown remains the existing gFFI teardown. Standalone constructor defaults and Control Pad/keyboard/touch behavior remain. |
+| `flutter/lib/mobile/pages/remote_browser_page.dart` | Opted-in entry delegates to the new shell. Original transient modal route/transport implementation remains feature-off. |
+| `flutter/lib/mobile/pages/home_page.dart` | Post-frame startup entry only when the supported Dev opt-in is enabled. Original Home page stays underneath for Connections/settings. |
+| `flutter/lib/mobile/pages/connection_page.dart` | Visible Dev-only preview toggle/entry. Original peer connection and remote-browser entry remain. |
+
+New shell, transport ownership and metadata logic live in browser-specific files. No Rust, host SOCKS/loopback/protocol, native loopback script/extension, AppDelegate/engine, release identity/version, localization, dependency or submodule changes are included. Existing shared paths were not refactored to share implementation. `git diff --check` passes.
+
+## Remaining acceptance and limits
+
+The coordinator owns physical iPad Air/iPhone install and acceptance. I did not run native UI automation, take device screenshots, test real Google/localhost WebCrypto/cookies, verify hardware keyboard/Control Pad on the device, test two real hosts, orientation/backgrounding, or WebKit memory pressure. The signed Profile app above is ready for that work; no simulator/device run is claimed.
+
+Expected first-delivery limits remain: iOS/iPadOS only (remote browser iOS 17+, localhost routing iOS 18.4+), one live Desktop, 32 websites per native workspace, no full Back/Forward persistence across restart, and explicit reload if WebKit terminates a content process. Bookmark management requires a connected website surface; saved bookmarks/favorites remain readable and openable while disconnected. Existing cookie/profile migration is implemented but still needs the coordinator's before/after device-storage and login check. No new Mac browser client or production release is included.
