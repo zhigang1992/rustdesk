@@ -64,7 +64,10 @@ impl Drop for BrowserProxy {
 }
 
 async fn serve(mut socket: TcpStream, token: &str) -> ResultType<()> {
-    let mut remote = timeout(HANDSHAKE_TIMEOUT, handshake(&mut socket, token)).await??;
+    let (mut remote, loopback) = timeout(HANDSHAKE_TIMEOUT, handshake(&mut socket, token)).await??;
+    if loopback {
+        return super::loopback::relay(socket, remote).await;
+    }
     tokio::io::copy_bidirectional(&mut socket, &mut remote).await?;
     Ok(())
 }
@@ -76,7 +79,7 @@ async fn reply(socket: &mut TcpStream, status: u8) -> ResultType<()> {
     Ok(())
 }
 
-async fn handshake(socket: &mut TcpStream, token: &str) -> ResultType<TcpStream> {
+async fn handshake(socket: &mut TcpStream, token: &str) -> ResultType<(TcpStream, bool)> {
     let version = socket.read_u8().await?;
     let methods_len = socket.read_u8().await?;
     let mut methods = vec![0; methods_len as usize];
@@ -134,10 +137,17 @@ async fn handshake(socket: &mut TcpStream, token: &str) -> ResultType<TcpStream>
         reply(socket, 8).await?;
         bail!("Invalid SOCKS5 target");
     }
-    match TcpStream::connect((host.as_str(), port)).await {
+    let loopback = match super::loopback::target(&host) {
+        Ok(target) => target,
+        Err(error) => {
+            reply(socket, 8).await?;
+            return Err(error);
+        }
+    };
+    match TcpStream::connect((loopback.unwrap_or(host.as_str()), port)).await {
         Ok(remote) => {
             reply(socket, 0).await?;
-            Ok(remote)
+            Ok((remote, loopback.is_some()))
         }
         Err(error) => {
             reply(socket, 5).await?;
@@ -178,6 +188,75 @@ mod tests {
         socket.read_exact(&mut reply).await.unwrap();
         assert_eq!(reply[1], 0);
         socket
+    }
+
+    async fn connect_alias(proxy: &BrowserProxy, port: u16) -> TcpStream {
+        let (mut socket, auth) = authenticate(proxy, TOKEN).await;
+        assert_eq!(auth, [1, 0]);
+        let host = b"localhost.rustdesk.localhost";
+        let mut request = vec![5, 1, 0, 3, host.len() as u8];
+        request.extend_from_slice(host);
+        request.extend_from_slice(&port.to_be_bytes());
+        socket.write_all(&request).await.unwrap();
+        let mut reply = [0; 10];
+        socket.read_exact(&mut reply).await.unwrap();
+        assert_eq!(reply[1], 0);
+        socket
+    }
+
+    #[tokio::test]
+    async fn synthetic_localhost_preserves_ajax_body_cookies_and_cors() {
+        use hbb_common::tokio::io::{AsyncBufReadExt, BufReader};
+        let proxy = BrowserProxy::start(TOKEN.to_owned()).await.unwrap();
+        let target = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+        let port = target.local_addr().unwrap().port();
+        let mut browser = connect_alias(&proxy, port).await;
+        let (server, _) = target.accept().await.unwrap();
+        let request = format!("POST /api HTTP/1.1\r\nHost: localhost.rustdesk.localhost:{port}\r\nOrigin: http://localhost.rustdesk.localhost:{port}\r\nContent-Length: 4\r\n\r\nping");
+        browser.write_all(request.as_bytes()).await.unwrap();
+        let mut server = BufReader::new(server);
+        let mut received = String::new();
+        loop {
+            let mut line = String::new();
+            server.read_line(&mut line).await.unwrap();
+            if line == "\r\n" { break; }
+            received.push_str(&line);
+        }
+        assert!(received.contains(&format!("Host: localhost:{port}\r\n")));
+        assert!(received.contains(&format!("Origin: http://localhost:{port}\r\n")));
+        let mut body = [0; 4];
+        server.read_exact(&mut body).await.unwrap();
+        assert_eq!(&body, b"ping");
+        server.write_all(format!("HTTP/1.1 200 OK\r\nAccess-Control-Allow-Origin: http://localhost:{port}\r\nSet-Cookie: session=dev; Domain=localhost; Path=/\r\nContent-Length: 4\r\n\r\npong").as_bytes()).await.unwrap();
+        drop(server);
+        let mut response = String::new();
+        timeout(Duration::from_secs(2), browser.read_to_string(&mut response)).await.unwrap().unwrap();
+        assert!(response.contains(&format!("Access-Control-Allow-Origin: http://localhost.rustdesk.localhost:{port}\r\n")));
+        assert!(response.contains("Domain=localhost.rustdesk.localhost; Path=/"));
+        assert!(response.ends_with("\r\n\r\npong"));
+    }
+
+    #[tokio::test]
+    async fn synthetic_localhost_keeps_websocket_upgrade_and_frames() {
+        let proxy = BrowserProxy::start(TOKEN.to_owned()).await.unwrap();
+        let target = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+        let mut browser = connect_alias(&proxy, target.local_addr().unwrap().port()).await;
+        let (mut server, _) = target.accept().await.unwrap();
+        browser.write_all(b"GET /hmr HTTP/1.1\r\nHost: localhost.rustdesk.localhost\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n").await.unwrap();
+        let mut request = vec![0; 512];
+        let n = server.read(&mut request).await.unwrap();
+        let request = String::from_utf8_lossy(&request[..n]);
+        assert!(request.contains("Host: localhost\r\n"));
+        assert!(request.contains("Connection: Upgrade\r\n"));
+        let upgrade = b"HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n\x81\x02ok";
+        server.write_all(upgrade).await.unwrap();
+        let mut received = vec![0; upgrade.len()];
+        timeout(Duration::from_secs(2), browser.read_exact(&mut received)).await.unwrap().unwrap();
+        assert_eq!(received, upgrade);
+        browser.write_all(b"\x81\x02hi").await.unwrap();
+        let mut frame = [0; 4];
+        timeout(Duration::from_secs(2), server.read_exact(&mut frame)).await.unwrap().unwrap();
+        assert_eq!(&frame, b"\x81\x02hi");
     }
 
     #[tokio::test]

@@ -1,0 +1,19 @@
+{
+  "manifest_version": 3,
+  "name": "RustDesk remote localhost",
+  "description": "Route remote localhost resources through the selected RustDesk host.",
+  "version": "1.0",
+  "permissions": [
+    "declarativeNetRequestWithHostAccess",
+    "nativeMessaging"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "background": {
+    "scripts": [
+      "background.js"
+    ],
+    "persistent": false
+  }
+}

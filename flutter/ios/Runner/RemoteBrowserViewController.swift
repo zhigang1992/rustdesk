@@ -13,6 +13,7 @@ final class RemoteBrowserViewController: UIViewController, WKNavigationDelegate,
         let close = UIButton(type: .system)
         var width: NSLayoutConstraint?
         var observations: [NSKeyValueObservation] = []
+        var routingTab: NSObject?
         init(_ webView: WKWebView) { self.webView = webView }
     }
 
@@ -38,6 +39,7 @@ final class RemoteBrowserViewController: UIViewController, WKNavigationDelegate,
     private var selected = 0
     private var finished = false
     private var desktopMode: Bool
+    private var routing: NSObject?
     private let bar = UIStackView()
     private let tabScroll = UIScrollView()
     private let tabStrip = UIStackView()
@@ -171,6 +173,19 @@ final class RemoteBrowserViewController: UIViewController, WKNavigationDelegate,
             message.widthAnchor.constraint(lessThanOrEqualTo: content.widthAnchor, constant: -40),
         ])
 
+        if #available(iOS 18.4, *) {
+            let routing = RemoteBrowserRouting(store: store)
+            self.routing = routing
+            showMessage("Preparing remote browser…")
+            routing.prepare { [weak self] error in
+                guard let self = self, !self.finished else { return }
+                if let error = error { self.showMessage("Could not prepare remote browsing: " + error.localizedDescription) }
+                else { self.restoreTabs() }
+            }
+        } else { restoreTabs() }
+    }
+
+    private func restoreTabs() {
         if let data = UserDefaults.standard.data(forKey: storageKey),
            let saved = try? JSONDecoder().decode(SavedTabs.self, from: data) {
             for text in saved.urls.prefix(32) { _ = addTab(url: Self.webURL(text)) }
@@ -217,6 +232,9 @@ final class RemoteBrowserViewController: UIViewController, WKNavigationDelegate,
             config.applicationNameForUserAgent = "Version/\(version.majorVersion).\(version.minorVersion) Safari/\(safariVersion)"
             config.defaultWebpagePreferences.preferredContentMode = desktopMode ? .desktop : .mobile
         }
+        if #available(iOS 18.4, *), let routing = routing as? RemoteBrowserRouting {
+            if configuration == nil { routing.configure(config) }
+        }
         let web = WKWebView(frame: .zero, configuration: config)
         web.navigationDelegate = self
         web.uiDelegate = self
@@ -224,6 +242,7 @@ final class RemoteBrowserViewController: UIViewController, WKNavigationDelegate,
         web.isFindInteractionEnabled = true
         web.isInspectable = Bundle.main.bundleIdentifier?.hasSuffix(".dev") == true
         let tab = Tab(web)
+        if #available(iOS 18.4, *), let routing = routing as? RemoteBrowserRouting { tab.routingTab = routing.opened(web) }
         tab.row.alignment = .center
         tab.row.layer.cornerRadius = 8
         tab.row.clipsToBounds = true
@@ -265,7 +284,7 @@ final class RemoteBrowserViewController: UIViewController, WKNavigationDelegate,
         ]
         tabs.append(tab)
         selectTab(tabs.count - 1)
-        if let url = url { web.load(URLRequest(url: url)) }
+        if let url = url { load(url) }
         return web
     }
 
@@ -290,6 +309,7 @@ final class RemoteBrowserViewController: UIViewController, WKNavigationDelegate,
     private func closeTab(_ index: Int) {
         guard tabs.indices.contains(index) else { return }
         let tab = tabs[index]
+        if #available(iOS 18.4, *), let routing = routing as? RemoteBrowserRouting { routing.closed(tab.routingTab) }
         tab.webView.stopLoading()
         tab.webView.removeFromSuperview()
         tabStrip.removeArrangedSubview(tab.row)
@@ -301,7 +321,7 @@ final class RemoteBrowserViewController: UIViewController, WKNavigationDelegate,
     }
 
     private func saveTabs() {
-        let state = SavedTabs(urls: tabs.map { $0.webView.url?.absoluteString ?? "about:blank" }, selected: selected)
+        let state = SavedTabs(urls: tabs.map { $0.webView.url.map { RemoteBrowserLoopback.url($0, remote: false).absoluteString } ?? "about:blank" }, selected: selected)
         do { UserDefaults.standard.set(try JSONEncoder().encode(state), forKey: storageKey) }
         catch { showMessage("Could not save browser tabs: " + error.localizedDescription) }
     }
@@ -318,8 +338,9 @@ final class RemoteBrowserViewController: UIViewController, WKNavigationDelegate,
             tab.row.backgroundColor = active ? .tertiarySystemFill : .secondarySystemBackground
             tab.button.isHidden = active
             tab.address.isHidden = !active
-            if !tab.address.isFirstResponder { tab.address.text = tab.webView.url?.absoluteString }
-            tab.button.setTitle(tab.webView.url?.absoluteString ?? "New tab", for: .normal)
+            let address = tab.webView.url.map { RemoteBrowserLoopback.url($0, remote: false).absoluteString }
+            if !tab.address.isFirstResponder { tab.address.text = address }
+            tab.button.setTitle(address ?? "New tab", for: .normal)
             tab.button.accessibilityLabel = "Select tab \(index + 1)"
             tab.close.accessibilityLabel = "Close tab \(index + 1)"
         }
@@ -368,7 +389,7 @@ final class RemoteBrowserViewController: UIViewController, WKNavigationDelegate,
                 self?.current?.findInteraction?.presentFindNavigator(showingReplace: false)
             },
             UIAction(title: "Copy address", image: UIImage(systemName: "doc.on.doc")) { [weak self] _ in
-                UIPasteboard.general.string = self?.current?.url?.absoluteString
+                UIPasteboard.general.string = self?.current?.url.map { RemoteBrowserLoopback.url($0, remote: false).absoluteString }
             },
         ])
     }
@@ -383,7 +404,7 @@ final class RemoteBrowserViewController: UIViewController, WKNavigationDelegate,
             field.keyboardType = .URL
             field.autocapitalizationType = .none
             field.autocorrectionType = .no
-            field.text = bookmark?.url ?? self.current?.url?.absoluteString
+            field.text = bookmark?.url ?? self.current?.url.map { RemoteBrowserLoopback.url($0, remote: false).absoluteString }
         }
         alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
         alert.addAction(UIAlertAction(title: "Save", style: .default) { [weak self, weak alert] _ in
@@ -410,7 +431,12 @@ final class RemoteBrowserViewController: UIViewController, WKNavigationDelegate,
     private func load(_ url: URL) {
         view.endEditing(true)
         message.isHidden = true
-        current?.load(URLRequest(url: url))
+        let mapped = RemoteBrowserLoopback.url(url, remote: true)
+        if mapped != url && routing == nil {
+            showMessage("Remote localhost browsing requires iOS 18.4 or later.")
+            return
+        }
+        current?.load(URLRequest(url: routing == nil ? url : mapped))
     }
 
     private func showMessage(_ text: String) {

@@ -7,6 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		A918E01430A10300001B0010 /* RemoteBrowserLoopback.swift in Sources */ = {isa = PBXBuildFile; fileRef = A918E01430A10300001B0011 /* RemoteBrowserLoopback.swift */; };
+		A918E01430A10300001B0012 /* RemoteBrowserExtension in Resources */ = {isa = PBXBuildFile; fileRef = A918E01430A10300001B0013 /* RemoteBrowserExtension */; };
 		A918E01430A10300001B0003 /* RemoteBrowserPlugin.swift in Sources */ = {isa = PBXBuildFile; fileRef = A918E01430A10300001B0004 /* RemoteBrowserPlugin.swift */; };
 		A918E01430A10300001B0001 /* RemoteBrowserViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A918E01430A10300001B0002 /* RemoteBrowserViewController.swift */; };
 		1498D2341E8E89220040F4C2 /* GeneratedPluginRegistrant.m in Sources */ = {isa = PBXBuildFile; fileRef = 1498D2331E8E89220040F4C2 /* GeneratedPluginRegistrant.m */; };
@@ -32,6 +34,8 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		A918E01430A10300001B0011 /* RemoteBrowserLoopback.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteBrowserLoopback.swift; sourceTree = "<group>"; };
+		A918E01430A10300001B0013 /* RemoteBrowserExtension */ = {isa = PBXFileReference; lastKnownFileType = folder; path = RemoteBrowserExtension; sourceTree = "<group>"; };
 		A918E01430A10300001B0004 /* RemoteBrowserPlugin.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteBrowserPlugin.swift; sourceTree = "<group>"; };
 		A918E01430A10300001B0002 /* RemoteBrowserViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteBrowserViewController.swift; sourceTree = "<group>"; };
 		0A3A301029F021DD0095DDA5 /* liblibrustdesk.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; name = liblibrustdesk.a; path = "../../target/aarch64-apple-ios/release/liblibrustdesk.a"; sourceTree = "<group>"; };
@@ -110,6 +114,8 @@
 				74858FAE1ED2DC5600515810 /* AppDelegate.swift */,
 				A918E01430A10300001B0004 /* RemoteBrowserPlugin.swift */,
 				A918E01430A10300001B0002 /* RemoteBrowserViewController.swift */,
+				A918E01430A10300001B0011 /* RemoteBrowserLoopback.swift */,
+				A918E01430A10300001B0013 /* RemoteBrowserExtension */,
 				74858FAD1ED2DC5600515810 /* Runner-Bridging-Header.h */,
 			);
 			path = Runner;
@@ -197,6 +203,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				A918E01430A10300001B0012 /* RemoteBrowserExtension in Resources */,
 				97C147011CF9000F007C117D /* LaunchScreen.storyboard in Resources */,
 				3B3967161E833CAA004F5970 /* AppFrameworkInfo.plist in Resources */,
 				97C146FE1CF9000F007C117D /* Assets.xcassets in Resources */,
@@ -287,6 +294,7 @@
 				74858FAF1ED2DC5600515810 /* AppDelegate.swift in Sources */,
 				A918E01430A10300001B0003 /* RemoteBrowserPlugin.swift in Sources */,
 				A918E01430A10300001B0001 /* RemoteBrowserViewController.swift in Sources */,
+				A918E01430A10300001B0010 /* RemoteBrowserLoopback.swift in Sources */,
 				1498D2341E8E89220040F4C2 /* GeneratedPluginRegistrant.m in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

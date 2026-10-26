@@ -17,6 +17,8 @@ pub fn token(host: &str, port: i32) -> Option<&str> {
 pub mod client;
 #[cfg(any(target_os = "macos", test))]
 pub mod socks;
+#[cfg(any(target_os = "macos", test))]
+mod loopback;
 
 #[cfg(test)]
 mod tests {
