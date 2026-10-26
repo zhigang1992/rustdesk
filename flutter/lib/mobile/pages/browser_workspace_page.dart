@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_hbb/common.dart';
@@ -7,6 +8,7 @@ import 'package:flutter_hbb/common/widgets/overlay.dart';
 import 'package:flutter_hbb/models/browser_workspace.dart';
 import '../browser/browser_workspace_controller.dart';
 import '../browser/browser_panel_diagnostics.dart';
+import '../browser/browser_status_bar_tap.dart';
 import 'remote_page.dart';
 import 'settings_page.dart';
 
@@ -68,6 +70,7 @@ class _BrowserWorkspacePageState extends State<BrowserWorkspacePage> {
   void initState() {
     super.initState();
     browserPanelTrace('workspace init');
+    GestureBinding.instance.pointerRouter.addGlobalRoute(_panelPointer);
     owner.addListener(_changed);
     _addressFocus.addListener(_changed);
     _peers.init((callback) {
@@ -83,6 +86,12 @@ class _BrowserWorkspacePageState extends State<BrowserWorkspacePage> {
     if (mounted) setState(() {});
     _drainDesktopRequest();
     _syncWebVisibility();
+  }
+
+  void _panelPointer(PointerEvent event) {
+    if (_covered && rejectBrowserPanelStatusBarTap(event)) {
+      browserPanelTrace('panel rejected engine status-bar tap');
+    }
   }
 
   void _syncWebVisibility() {
@@ -131,6 +140,7 @@ class _BrowserWorkspacePageState extends State<BrowserWorkspacePage> {
   @override
   void dispose() {
     browserPanelTrace('workspace dispose', stack: true);
+    GestureBinding.instance.pointerRouter.removeGlobalRoute(_panelPointer);
     debugPrint('Browser workspace: page disposed');
     mobileWorkspaceCloseHandler = null;
     owner.removeListener(_changed);
@@ -977,11 +987,7 @@ class _BrowserWorkspacePageState extends State<BrowserWorkspacePage> {
                             if (_desktopDisposed?.isCompleted == false)
                               _desktopDisposed!.complete();
                           })))),
-            if (item?.desktopSelected != true)
-              Offstage(
-                  offstage: _covered,
-                  child: ExcludeFocus(
-                      excluding: _covered, child: _webContent(item))),
+            if (item?.desktopSelected != true) _webContent(item),
           ])),
         ]))));
   }

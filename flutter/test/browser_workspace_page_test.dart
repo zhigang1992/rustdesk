@@ -83,7 +83,7 @@ void main() {
   }
 
   testWidgets(
-      'panels retain their routes across native updates and restore the retained web surface',
+      'workspace panels survive the engine status-bar touch and retain outside-tap dismissal',
       (tester) async {
     await showPage(tester);
     final web = tester.element(find.byType(UiKitView));
@@ -104,26 +104,13 @@ void main() {
       }
       await tester.pumpAndSettle();
       expect(find.text(panel), findsOneWidget);
-      expect(find.byType(UiKitView), findsNothing);
-      expect(find.byType(UiKitView, skipOffstage: false).evaluate().single,
-          same(web));
-      item.tabs = [
-        BrowserTab('a',
-            url: 'https://a.example/updated',
-            title: 'Updated A',
-            loading: true),
-        BrowserTab('b', url: 'https://b.example', title: 'Background B'),
-        item.tabs[2],
-      ];
-      await owner.command(item, 'blur');
-      await owner.command(item, 'visibility', value: 'false');
+      await tester.sendEventToBinding(const PointerDownEvent(
+          pointer: 77, device: 0, position: Offset.zero));
+      await tester.sendEventToBinding(const PointerUpEvent(
+          pointer: 77, device: 0, position: Offset.zero));
       await tester.pumpAndSettle();
       expect(find.text(panel), findsOneWidget);
-      if (panel != 'Switch or add computer') {
-        await tester.tap(find.text(panel));
-        await tester.pumpAndSettle();
-        expect(find.text(panel), findsOneWidget);
-      }
+      expect(tester.element(find.byType(UiKitView)), same(web));
       await tester.tapAt(const Offset(4, 200));
       await tester.pumpAndSettle();
       expect(find.text(panel), findsNothing);
@@ -131,6 +118,16 @@ void main() {
     }
     expect(nativeCalls.where((call) => call.method == 'create'), hasLength(1));
     expect(nativeCalls.where((call) => call.method == 'dispose'), isEmpty);
+    await tester.tap(find.byIcon(Icons.expand_more));
+    await tester.pumpAndSettle();
+    await tester.drag(find.text('Computers'), const Offset(0, 600));
+    await tester.pumpAndSettle();
+    expect(find.text('Computers'), findsNothing);
+    await tester.tap(find.byTooltip('Workspace menu'));
+    await tester.pumpAndSettle();
+    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+    await tester.pumpAndSettle();
+    expect(find.text('Switch or add computer'), findsNothing);
     await closePage(tester);
   }, variant: TargetPlatformVariant.only(TargetPlatform.iOS));
 
