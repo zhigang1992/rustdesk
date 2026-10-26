@@ -127,6 +127,7 @@ class _BrowserWorkspacePageState extends State<BrowserWorkspacePage> {
 
   @override
   void dispose() {
+    debugPrint('Browser workspace: page disposed');
     mobileWorkspaceCloseHandler = null;
     owner.removeListener(_changed);
     _addressFocus.removeListener(_changed);
@@ -150,10 +151,13 @@ class _BrowserWorkspacePageState extends State<BrowserWorkspacePage> {
     FocusManager.instance.primaryFocus?.unfocus();
     if (!mounted) return null;
     _setCovered(true);
+    debugPrint('Browser workspace: opening covered route');
     if (workspace != null) await owner.command(workspace!, 'blur');
     try {
       return await action();
     } finally {
+      debugPrint(
+          'Browser workspace: covered route completed, mounted=$mounted');
       if (mounted) _setCovered(false);
     }
   }
@@ -560,12 +564,6 @@ class _BrowserWorkspacePageState extends State<BrowserWorkspacePage> {
     final desktop = item?.desktopSelected == true;
     final connected = owner.connections[item?.peer]?.connected == true;
     final compact = width < 700;
-    final backgroundDesktop =
-        !desktop && item != null && owner.model.desktopPeer == item.peer;
-    final inactiveCount = ((width - 600 - (backgroundDesktop ? 110 : 0)) /
-            (width > 1100 ? 140 : 105))
-        .floor()
-        .clamp(0, 3);
     return Material(
         color: Theme.of(context).colorScheme.surfaceContainerHighest,
         child: SizedBox(
@@ -596,37 +594,59 @@ class _BrowserWorkspacePageState extends State<BrowserWorkspacePage> {
                               owner.connect(item);
                             }
                           }),
-                if (item != null)
-                  ...item.tabs
-                      .where((tab) => desktop || tab.id != item.selected)
-                      .take(inactiveCount)
-                      .map((tab) => SizedBox(
-                          width: width > 1100 ? 140 : 105,
-                          child: Row(children: [
-                            Expanded(
-                                child: TextButton(
-                                    onPressed: () => _selectTab(item, tab),
-                                    child: Text(tab.title,
-                                        overflow: TextOverflow.ellipsis,
-                                        maxLines: 1))),
-                            SizedBox(
-                                width: 28,
-                                child: _button(
-                                    Icons.close,
-                                    'Close ${tab.title}',
-                                    () => _closeTab(item, tab)))
-                          ]))),
-                if (!desktop &&
-                    item != null &&
-                    owner.model.desktopPeer == item.peer)
-                  SizedBox(
-                      width: 110,
-                      child: TextButton.icon(
-                          onPressed: _openDesktop,
-                          icon: const Icon(Icons.desktop_windows, size: 17),
-                          label: const Text('Desktop'))),
               ],
-              Expanded(child: _selectedTab(item)),
+              if (compact || item == null)
+                Expanded(child: _selectedTab(item))
+              else
+                Expanded(child: LayoutBuilder(builder: (context, constraints) {
+                  final inactiveWidth = width > 1100 ? 140.0 : 105.0;
+                  final hasDesktop = owner.model.desktopPeer == item.peer;
+                  final selectedWidth = (constraints.maxWidth -
+                          (item.tabs.length - (desktop ? 0 : 1)) *
+                              inactiveWidth -
+                          (hasDesktop && !desktop ? 110 : 0))
+                      .clamp(280.0,
+                          constraints.maxWidth.clamp(280.0, double.infinity));
+                  return SingleChildScrollView(
+                      scrollDirection: Axis.horizontal,
+                      child: Row(children: [
+                        for (final tab in item.tabs)
+                          SizedBox(
+                              key: ValueKey('tab-${item.peer}-${tab.id}'),
+                              width: !desktop && tab.id == item.selected
+                                  ? selectedWidth
+                                  : inactiveWidth,
+                              child: !desktop && tab.id == item.selected
+                                  ? _selectedTab(item)
+                                  : Row(children: [
+                                      Expanded(
+                                          child: TextButton(
+                                              onPressed: () =>
+                                                  _selectTab(item, tab),
+                                              child: Text(tab.title,
+                                                  overflow:
+                                                      TextOverflow.ellipsis,
+                                                  maxLines: 1))),
+                                      SizedBox(
+                                          width: 28,
+                                          child: _button(
+                                              Icons.close,
+                                              'Close ${tab.title}',
+                                              () => _closeTab(item, tab)))
+                                    ])),
+                        if (hasDesktop)
+                          SizedBox(
+                              key: ValueKey('tab-${item.peer}-desktop'),
+                              width: desktop ? selectedWidth : 110,
+                              child: desktop
+                                  ? _selectedTab(item)
+                                  : TextButton.icon(
+                                      onPressed: _openDesktop,
+                                      icon: const Icon(Icons.desktop_windows,
+                                          size: 17),
+                                      label: const Text('Desktop'))),
+                      ]));
+                })),
               if (!compact) _button(Icons.add, 'New tab', _newTab),
               _button(
                   Icons.tab_outlined,
@@ -638,10 +658,14 @@ class _BrowserWorkspacePageState extends State<BrowserWorkspacePage> {
                   tooltip: 'Workspace menu',
                   icon: const Icon(Icons.more_horiz),
                   onOpened: () {
+                    debugPrint('Browser workspace: popup opened');
                     _setCovered(true);
                     if (item != null) owner.command(item, 'blur');
                   },
-                  onCanceled: () => _setCovered(false),
+                  onCanceled: () {
+                    debugPrint('Browser workspace: popup canceled');
+                    _setCovered(false);
+                  },
                   onSelected: (action) async {
                     _setCovered(false);
                     switch (action) {
@@ -915,6 +939,7 @@ class _BrowserWorkspacePageState extends State<BrowserWorkspacePage> {
         },
         child: Scaffold(
             body: SafeArea(
+                bottom: false,
                 child: Column(children: [
           LayoutBuilder(
               builder: (context, constraints) =>
@@ -926,7 +951,9 @@ class _BrowserWorkspacePageState extends State<BrowserWorkspacePage> {
                   offstage: !desktopVisible,
                   child: ExcludeFocus(
                       excluding: !desktopVisible,
-                      child: RemotePage(
+                      child: SafeArea(
+                          top: false,
+                          child: RemotePage(
                           key: ValueKey('desktop-$desktopPeer'),
                           id: desktopPeer,
                           password: owner.desktopConfiguration?.password,
@@ -939,8 +966,12 @@ class _BrowserWorkspacePageState extends State<BrowserWorkspacePage> {
                           onEmbeddedDisposed: () {
                             if (_desktopDisposed?.isCompleted == false)
                               _desktopDisposed!.complete();
-                          }))),
-            if (item?.desktopSelected != true) _webContent(item),
+                          })))),
+            if (item?.desktopSelected != true)
+              Offstage(
+                  offstage: _covered,
+                  child: ExcludeFocus(
+                      excluding: _covered, child: _webContent(item))),
           ])),
         ]))));
   }
