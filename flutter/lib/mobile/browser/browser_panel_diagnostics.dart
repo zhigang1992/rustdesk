@@ -37,6 +37,15 @@ class BrowserPanelNavigatorObserver extends NavigatorObserver
   void didPush(Route<dynamic> route, Route<dynamic>? previousRoute) {
     browserPanelTrace(
         'navigator push ${_route(route)} previous=${_route(previousRoute)}');
+    if (route is PopupRoute<dynamic>) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!route.isActive) return;
+        route.addScopedWillPopCallback(() {
+          browserPanelTrace('navigator willPop ${_route(route)}', stack: true);
+          return Future.value(true);
+        });
+      });
+    }
   }
 
   @override
@@ -74,5 +83,11 @@ class BrowserPanelNavigatorObserver extends NavigatorObserver
   @override
   void didChangeMetrics() {
     browserPanelTrace('metrics changed');
+  }
+
+  @override
+  Future<bool> didPopRoute() {
+    browserPanelTrace('platform didPopRoute', stack: true);
+    return Future.value(false);
   }
 }
