@@ -7,6 +7,7 @@ import CryptoKit
 final class RemoteBrowserViewController: UIViewController, WKNavigationDelegate, WKUIDelegate, UITextFieldDelegate {
     private final class Tab {
         let webView: WKWebView
+        let id = UUID().uuidString
         let row = UIStackView()
         let button = UIButton(type: .system)
         let address = UITextField()
@@ -28,6 +29,11 @@ final class RemoteBrowserViewController: UIViewController, WKNavigationDelegate,
     }
 
     var onClose: (() -> Void)?
+    var onState: (([String: Any]) -> Void)?
+    private let embedded: Bool
+    private var recents: [Bookmark] = []
+    private var restored = false
+    private var workspaceVisible = true
     private let store: WKWebsiteDataStore
     private let storageKey: String
     private let bookmarksKey: String
@@ -82,12 +88,13 @@ final class RemoteBrowserViewController: UIViewController, WKNavigationDelegate,
         }
     }
 
-    init(peer: String, identity: String, port: UInt16, username: String, password: String, initialURL: URL?) {
+    init(peer: String, identity: String, port: UInt16, username: String, password: String, initialURL: URL?, embedded: Bool = false) {
         let profileID = Self.profileID(for: identity)
         store = WKWebsiteDataStore(forIdentifier: profileID)
         storageKey = "remote-browser.tabs." + profileID.uuidString
         bookmarksKey = "remote-browser.bookmarks." + profileID.uuidString
         desktopKey = "remote-browser.desktop." + profileID.uuidString
+        self.embedded = embedded
         self.peer = peer
         self.initialURL = initialURL
         desktopMode = UserDefaults.standard.object(forKey: desktopKey) as? Bool ?? (UIDevice.current.userInterfaceIdiom == .pad)
@@ -100,6 +107,8 @@ final class RemoteBrowserViewController: UIViewController, WKNavigationDelegate,
         proxy.applyCredential(username: username, password: password)
         store.proxyConfigurations = [proxy]
         super.init(nibName: nil, bundle: nil)
+        if let data = UserDefaults.standard.data(forKey: storageKey + ".recents"),
+           let saved = try? JSONDecoder().decode([Bookmark].self, from: data) { recents = saved }
     }
 
     required init?(coder: NSCoder) { return nil }
@@ -154,11 +163,12 @@ final class RemoteBrowserViewController: UIViewController, WKNavigationDelegate,
             bar.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor, constant: 4),
             bar.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -4),
             bar.heightAnchor.constraint(equalToConstant: 44),
-            content.topAnchor.constraint(equalTo: bar.bottomAnchor),
+            content.topAnchor.constraint(equalTo: embedded ? view.topAnchor : bar.bottomAnchor),
             content.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             content.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             content.bottomAnchor.constraint(equalTo: view.bottomAnchor),
         ])
+        bar.isHidden = embedded
         message.font = .preferredFont(forTextStyle: .body)
         message.textColor = .secondaryLabel
         message.backgroundColor = .secondarySystemBackground
@@ -193,6 +203,8 @@ final class RemoteBrowserViewController: UIViewController, WKNavigationDelegate,
         }
         if let url = initialURL { _ = addTab(url: url) }
         if tabs.isEmpty { _ = addTab() }
+        restored = true
+        if embedded { refresh() }
     }
 
     override func viewDidLayoutSubviews() {
@@ -282,6 +294,12 @@ final class RemoteBrowserViewController: UIViewController, WKNavigationDelegate,
             web.observe(\.title, options: [.new]) { [weak self] _, _ in self?.refresh() },
             web.observe(\.isLoading, options: [.new]) { [weak self] _, _ in self?.refresh() },
         ]
+        if embedded {
+            tab.observations += [
+                web.observe(\.canGoBack, options: [.new]) { [weak self] _, _ in self?.refresh() },
+                web.observe(\.canGoForward, options: [.new]) { [weak self] _, _ in self?.refresh() },
+            ]
+        }
         tabs.append(tab)
         selectTab(tabs.count - 1)
         if let url = url { load(url) }
@@ -347,6 +365,7 @@ final class RemoteBrowserViewController: UIViewController, WKNavigationDelegate,
         updateMenus()
         view.setNeedsLayout()
         saveTabs()
+        if embedded && restored { onState?(workspaceState()) }
     }
 
     private func updateMenus() {
@@ -426,6 +445,7 @@ final class RemoteBrowserViewController: UIViewController, WKNavigationDelegate,
         do { UserDefaults.standard.set(try JSONEncoder().encode(bookmarks), forKey: bookmarksKey) }
         catch { showMessage("Could not save bookmarks: " + error.localizedDescription) }
         updateMenus()
+        if embedded { onState?(workspaceState()) }
     }
 
     private func load(_ url: URL) {
@@ -439,9 +459,70 @@ final class RemoteBrowserViewController: UIViewController, WKNavigationDelegate,
         current?.load(URLRequest(url: routing == nil ? url : mapped))
     }
 
+    func workspaceState() -> [String: Any] {
+        return ["ready": restored, "error": !restored && message.text?.hasPrefix("Could not prepare") == true ? (message.text ?? "") : "", "tabs": tabs.map { tab in
+            ["id": tab.id, "url": tab.webView.url.map { RemoteBrowserLoopback.url($0, remote: false).absoluteString } ?? "about:blank",
+             "title": tab.webView.title ?? "New tab", "loading": tab.webView.isLoading,
+             "back": tab.webView.canGoBack, "forward": tab.webView.canGoForward] as [String: Any]
+        }, "selected": tabs.indices.contains(selected) ? tabs[selected].id : "",
+        "bookmarks": bookmarks.map { ["title": $0.title, "url": $0.url] },
+        "recents": recents.map { ["title": $0.title, "url": $0.url] }]
+    }
+
+    static func saveOfflineTabs(identity: String, urls: [String], selected: Int) {
+        let state = SavedTabs(urls: urls.isEmpty ? ["about:blank"] : Array(urls.prefix(32)), selected: selected)
+        if let data = try? JSONEncoder().encode(state) {
+            UserDefaults.standard.set(data, forKey: "remote-browser.tabs." + profileID(for: identity).uuidString)
+        }
+    }
+
+    func reconnect(port: UInt16, username: String, password: String) {
+        var proxy = ProxyConfiguration(socksv5Proxy: .hostPort(host: "127.0.0.1", port: NWEndpoint.Port(rawValue: port)!))
+        proxy.allowFailover = false
+        proxy.matchDomains = []
+        proxy.excludedDomains = []
+        proxy.applyCredential(username: username, password: password)
+        store.proxyConfigurations = [proxy]
+    }
+
+    func workspaceCommand(_ command: String, tabID: String?, value: String?) {
+        guard restored else { return }
+        if let tabID = tabID {
+            guard let index = tabs.firstIndex(where: { $0.id == tabID }) else { return }
+            if command == "close" { closeTab(index); return }
+            selectTab(index)
+        }
+        switch command {
+        case "select": break
+        case "new": _ = addTab(url: value.flatMap(Self.addressURL))
+        case "close": closeTab(selected)
+        case "navigate":
+            if let url = value.flatMap(Self.addressURL) { load(url) }
+            else { showMessage("Enter an HTTP or HTTPS URL without credentials.") }
+        case "back": goBack()
+        case "forward": goForward()
+        case "reload": reload()
+        case "bookmark": editBookmark()
+        case "editBookmark": if let index = value.flatMap(Int.init) { editBookmark(index) }
+        case "deleteBookmark":
+            if let index = value.flatMap(Int.init), bookmarks.indices.contains(index) { bookmarks.remove(at: index); saveBookmarks() }
+        case "desktopWebsite": desktopMode.toggle(); UserDefaults.standard.set(desktopMode, forKey: desktopKey); current?.reload()
+        case "find": current?.findInteraction?.presentFindNavigator(showingReplace: false)
+        case "blur": view.endEditing(true)
+        case "visibility": workspaceVisible = value == "true"; if !workspaceVisible { view.endEditing(true) }; return
+        case "suspend":
+            view.endEditing(true)
+            for tab in tabs { tab.webView.stopLoading() }
+        case "resume": if current?.url != nil { current?.reload() }
+        default: break
+        }
+        refresh()
+    }
+
     private func showMessage(_ text: String) {
         message.text = text
         message.isHidden = false
+        if embedded && !restored { onState?(workspaceState()) }
     }
 
     @objc private func addBlankTab() {
@@ -496,14 +577,14 @@ final class RemoteBrowserViewController: UIViewController, WKNavigationDelegate,
     }
 
     func webView(_ webView: WKWebView, runJavaScriptAlertPanelWithMessage message: String, initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping () -> Void) {
-        guard webView === current, presentedViewController == nil else { completionHandler(); return }
+        guard webView === current, (!embedded || (workspaceVisible && view.window != nil)), presentedViewController == nil else { completionHandler(); return }
         let alert = UIAlertController(title: frame.request.url?.host, message: message, preferredStyle: .alert)
         alert.addAction(UIAlertAction(title: "OK", style: .default) { _ in completionHandler() })
         present(alert, animated: true)
     }
 
     func webView(_ webView: WKWebView, runJavaScriptConfirmPanelWithMessage message: String, initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping (Bool) -> Void) {
-        guard webView === current, presentedViewController == nil else { completionHandler(false); return }
+        guard webView === current, (!embedded || (workspaceVisible && view.window != nil)), presentedViewController == nil else { completionHandler(false); return }
         let alert = UIAlertController(title: frame.request.url?.host, message: message, preferredStyle: .alert)
         alert.addAction(UIAlertAction(title: "Cancel", style: .cancel) { _ in completionHandler(false) })
         alert.addAction(UIAlertAction(title: "OK", style: .default) { _ in completionHandler(true) })
@@ -511,7 +592,7 @@ final class RemoteBrowserViewController: UIViewController, WKNavigationDelegate,
     }
 
     func webView(_ webView: WKWebView, runJavaScriptTextInputPanelWithPrompt prompt: String, defaultText: String?, initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping (String?) -> Void) {
-        guard webView === current, presentedViewController == nil else { completionHandler(nil); return }
+        guard webView === current, (!embedded || (workspaceVisible && view.window != nil)), presentedViewController == nil else { completionHandler(nil); return }
         let alert = UIAlertController(title: frame.request.url?.host, message: prompt, preferredStyle: .alert)
         alert.addTextField { $0.text = defaultText }
         alert.addAction(UIAlertAction(title: "Cancel", style: .cancel) { _ in completionHandler(nil) })
@@ -522,7 +603,18 @@ final class RemoteBrowserViewController: UIViewController, WKNavigationDelegate,
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
         if webView === current { message.isHidden = true }
     }
-    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) { refresh() }
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        if embedded, let url = webView.url.map({ RemoteBrowserLoopback.url($0, remote: false) }), Self.webURL(url.absoluteString) != nil {
+            recents.removeAll { $0.url == url.absoluteString }
+            recents.insert(Bookmark(title: webView.title ?? url.absoluteString, url: url.absoluteString), at: 0)
+            recents = Array(recents.prefix(30))
+            if let data = try? JSONEncoder().encode(recents) { UserDefaults.standard.set(data, forKey: storageKey + ".recents") }
+        }
+        refresh()
+    }
+    func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+        if embedded && webView === current { showMessage("Page was unloaded. Choose Reload to recover it.") }
+    }
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) { show(error, from: webView) }
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) { show(error, from: webView) }
     private func show(_ error: Error, from web: WKWebView) {

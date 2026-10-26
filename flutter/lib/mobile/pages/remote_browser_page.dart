@@ -11,6 +11,8 @@ import 'package:flutter_hbb/models/model.dart';
 import 'package:flutter_hbb/models/platform_model.dart';
 import 'package:uuid/uuid.dart';
 
+import 'browser_workspace_page.dart';
+
 const _browserChannel = MethodChannel('rustdesk/remote-browser');
 bool _browserOpening = false;
 
@@ -25,6 +27,10 @@ Future<bool> remoteBrowserAvailable() async {
 
 Future<void> openRemoteBrowser(String peer, {String? url}) async {
   if (_browserOpening || peer.trim().isEmpty) return;
+  if (await browserWorkspaceEnabled()) {
+    await openBrowserWorkspace(peer: peer.trim(), url: url);
+    return;
+  }
   _browserOpening = true;
   try {
     if (!await remoteBrowserAvailable()) {

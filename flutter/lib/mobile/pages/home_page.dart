@@ -8,6 +8,7 @@ import '../../common/widgets/chat_page.dart';
 import '../../models/platform_model.dart';
 import '../../models/state_model.dart';
 import 'connection_page.dart';
+import 'browser_workspace_page.dart';
 
 abstract class PageShape extends Widget {
   final String title = "";
@@ -43,6 +44,11 @@ class HomePageState extends State<HomePage> {
   void initState() {
     super.initState();
     initPages();
+    if (isIOS) WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (await browserWorkspaceEnabled() && mounted) {
+        await openBrowserWorkspace();
+      }
+    });
   }
 
   void initPages() {
