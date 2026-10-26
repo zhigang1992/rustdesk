@@ -1,5 +1,7 @@
 # Option A iOS browser workspace implementation
 
+Current review state: the workspace implementation and follow-up UI fixes are complete through `e1a82bea8`. Physical iPad Air testing confirmed that the host picker, tabs, bookmarks and workspace menu stay open after the synthetic status-bar tap fix. The clean signed Dev build was installed; its automatic relaunch timed out. The sections below preserve the original implementation and installation checkpoints; their pending-acceptance statements are superseded only by the specific results in the final validation section.
+
 Application source commit: `17997209f252801368e5ed9256d5a62ad5d7ff2e`, based on `bb1a75cb1` on the Remote-Browser branch. This report records implementation and local validation; physical-device acceptance remains with the coordinator.
 
 ## Delivered behavior
@@ -129,3 +131,19 @@ Device launch succeeded, and a subsequent process query confirmed the installed 
 Physical visual acceptance is still pending. The iPad subsequently reported `passcodeRequired: true`; a developer screenshot was entirely black and is not evidence of a rendered screen or of an application crash. The device debug transports were also intermittently unavailable. No successful on-device Google/localhost/WebCrypto, touch, keyboard, Desktop switching, or two-host test is claimed. An app launch console remains in Orca terminal `term_144a153b-ecc3-413e-92c7-67be62850c1f` for the pending awake-device check.
 
 Coordinator evidence is local in `/tmp/rd-option-a-validation/`: `install.json`, `launch.json`, `process-after-launch.json`, `dev-app-installed.json`, `release-app-installed.json`, and `storage-preservation-after-install.json`. Raw preference snapshots remain private local debugging files and were not published. The Mac's localhost page responded in the coordinator's desktop-browser baseline; that is not a substitute for the pending iPad network check.
+
+## Final UI fixes and device acceptance
+
+Website tabs now keep their keyed position when selected, so the selected address editor replaces its own tab in place instead of moving other titles between slots. The browser viewport fills the bottom safe area; the embedded Desktop keeps safe insets for its controls. Page regressions cover tab ordering, address edits, viewport size and keyboard insets.
+
+The disappearing panels were actual Navigator pops. Flutter 3.24.5's iOS engine converts status-bar scroll-to-top requests into touch Down/Up events at `(0, 0)` with device ID zero. iPadOS generated that event about 350 milliseconds after opening the host picker, causing its modal barrier to dismiss it. The browser workspace now consumes only that exact event while a panel is open, using its existing panel-coverage flag and a stateless gesture-arena member. Normal outside taps, sheet drags and Escape still dismiss panels. The ineffective web-content Offstage workaround and all temporary diagnostics were removed.
+
+Primary sources: [pinned engine implementation](https://github.com/flutter-team-archive/engine/blob/3.24.5/shell/platform/darwin/ios/framework/Source/FlutterViewController.mm#L516), [upstream issue](https://github.com/flutter/flutter/issues/177992), and [upstream fix](https://github.com/flutter/flutter/pull/182391). Intentional status-bar scroll-to-top is ignored while a workspace panel is open; without a panel, the filter does nothing.
+
+The regression fails on the old implementation and passes with the fix for all four panel types. Physical iPad testing explicitly confirmed that the host picker, tabs, bookmarks and workspace menu stay open. The device trace also recorded the exact synthetic event being rejected, followed by ordinary outside-tap dismissal.
+
+The final code passed 24 focused Flutter tests, analyzer checks with no errors or warnings (three existing informational lints), a signed Profile iOS build and deep strict signature verification. The clean `app.reily.rustdesk.dev` build was installed alongside the existing production app; automatic relaunch timed out, so foreground launch of that clean artifact is unconfirmed. Device acceptance used the same fix with temporary tracing enabled. No TestFlight release or production bundle/version change was made.
+
+PR preparation reran the complete selected browser/input suite on the integrated branch: **56 passed**, exit 0. This includes `browser_workspace_page_test.dart`, `browser_workspace_test.dart`, `remote_browser_link_test.dart`, `control_pad_model_test.dart`, `control_pad_overlay_test.dart`, `input_modifier_utils_test.dart` and `keyboard_shortcuts_test.dart`, using `flutter test --no-pub` from `flutter/`. Existing Control Pad mock/plugin callback diagnostics remain in the passing test output.
+
+The final panel fix changes runtime behavior only in `browser_workspace_page.dart`, with a new `browser_status_bar_tap.dart` helper and an updated page regression. Its callback exists only while the browser workspace is mounted. The broader feature's shared-file regression surface is listed above; existing native proxy/localhost/WebCrypto logic and feature-off routing remain unchanged. Real two-host operation, cookie/login migration, hardware-keyboard and Control Pad interaction, background/orientation changes and WebKit memory pressure remain broader acceptance limits.
