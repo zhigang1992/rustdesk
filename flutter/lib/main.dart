@@ -26,7 +26,6 @@ import 'package:window_manager/window_manager.dart';
 import 'common.dart';
 import 'consts.dart';
 import 'mobile/pages/home_page.dart';
-import 'mobile/browser/browser_panel_diagnostics.dart';
 import 'mobile/pages/server_page.dart';
 import 'mobile/widgets/deploy_dialog.dart';
 import 'models/platform_model.dart';
@@ -39,7 +38,6 @@ late List<String> kBootArgs;
 Future<void> main(List<String> args) async {
   earlyAssert();
   WidgetsFlutterBinding.ensureInitialized();
-  if (browserPanelDiagnosticsEnabled) browserPanelNavigatorObserver.start();
 
   debugPrint("launch args: $args");
   kBootArgs = List.from(args);
@@ -515,7 +513,6 @@ class _AppState extends State<App> with WidgetsBindingObserver {
           ],
           supportedLocales: supportedLocales,
           navigatorObservers: [
-            if (browserPanelDiagnosticsEnabled) browserPanelNavigatorObserver,
             // FirebaseAnalyticsObserver(analytics: analytics),
             BotToastNavigatorObserver(),
           ],

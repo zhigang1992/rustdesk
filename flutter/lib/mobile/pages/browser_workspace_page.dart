@@ -7,7 +7,6 @@ import 'package:flutter_hbb/common/widgets/autocomplete.dart';
 import 'package:flutter_hbb/common/widgets/overlay.dart';
 import 'package:flutter_hbb/models/browser_workspace.dart';
 import '../browser/browser_workspace_controller.dart';
-import '../browser/browser_panel_diagnostics.dart';
 import '../browser/browser_status_bar_tap.dart';
 import 'remote_page.dart';
 import 'settings_page.dart';
@@ -69,7 +68,6 @@ class _BrowserWorkspacePageState extends State<BrowserWorkspacePage> {
   @override
   void initState() {
     super.initState();
-    browserPanelTrace('workspace init');
     GestureBinding.instance.pointerRouter.addGlobalRoute(_panelPointer);
     owner.addListener(_changed);
     _addressFocus.addListener(_changed);
@@ -89,9 +87,7 @@ class _BrowserWorkspacePageState extends State<BrowserWorkspacePage> {
   }
 
   void _panelPointer(PointerEvent event) {
-    if (_covered && rejectBrowserPanelStatusBarTap(event)) {
-      browserPanelTrace('panel rejected engine status-bar tap');
-    }
+    if (_covered) rejectBrowserPanelStatusBarTap(event);
   }
 
   void _syncWebVisibility() {
@@ -124,7 +120,6 @@ class _BrowserWorkspacePageState extends State<BrowserWorkspacePage> {
   }
 
   void _sessionClosed() {
-    browserPanelTrace('workspace sessionClosed', stack: true);
     final authenticating = owner.authenticationPeer;
     if (authenticating != null) {
       final item =
@@ -139,9 +134,7 @@ class _BrowserWorkspacePageState extends State<BrowserWorkspacePage> {
 
   @override
   void dispose() {
-    browserPanelTrace('workspace dispose', stack: true);
     GestureBinding.instance.pointerRouter.removeGlobalRoute(_panelPointer);
-    debugPrint('Browser workspace: page disposed');
     mobileWorkspaceCloseHandler = null;
     owner.removeListener(_changed);
     _addressFocus.removeListener(_changed);
@@ -161,20 +154,14 @@ class _BrowserWorkspacePageState extends State<BrowserWorkspacePage> {
     _syncWebVisibility();
   }
 
-  Future<T?> _cover<T>(Future<T?> Function() action, {String panel = 'dialog'}) async {
-    browserPanelTrace('panel $panel requested');
+  Future<T?> _cover<T>(Future<T?> Function() action) async {
     FocusManager.instance.primaryFocus?.unfocus();
     if (!mounted) return null;
     _setCovered(true);
-    debugPrint('Browser workspace: opening covered route');
     if (workspace != null) await owner.command(workspace!, 'blur');
     try {
-      browserPanelTrace('panel $panel opening mounted=$mounted');
       return await action();
     } finally {
-      browserPanelTrace('panel $panel completed mounted=$mounted', stack: true);
-      debugPrint(
-          'Browser workspace: covered route completed, mounted=$mounted');
       if (mounted) _setCovered(false);
     }
   }
@@ -371,7 +358,7 @@ class _BrowserWorkspacePageState extends State<BrowserWorkspacePage> {
                           },
                           child: const Text('Add computer')),
                     ])));
-      }), panel: 'computers');
+      }));
 
   Future<void> _overview() => _cover(() => showModalBottomSheet<void>(
       context: context,
@@ -438,7 +425,7 @@ class _BrowserWorkspacePageState extends State<BrowserWorkspacePage> {
                                     }))),
                           ])),
                         ]))));
-      }), panel: 'tabs');
+      }));
 
   Future<void> _bookmarks() => _cover(() => showModalBottomSheet<void>(
       context: context,
@@ -491,7 +478,7 @@ class _BrowserWorkspacePageState extends State<BrowserWorkspacePage> {
                                   child: Text('Delete'))
                             ]))
             ])),
-          ]))), panel: 'bookmarks');
+          ]))));
 
   Widget _button(IconData icon, String label, VoidCallback? action) =>
       IconButton(
@@ -675,18 +662,11 @@ class _BrowserWorkspacePageState extends State<BrowserWorkspacePage> {
                   tooltip: 'Workspace menu',
                   icon: const Icon(Icons.more_horiz),
                   onOpened: () {
-                    browserPanelTrace('popup workspace opened');
-                    debugPrint('Browser workspace: popup opened');
                     _setCovered(true);
                     if (item != null) owner.command(item, 'blur');
                   },
-                  onCanceled: () {
-                    browserPanelTrace('popup workspace canceled', stack: true);
-                    debugPrint('Browser workspace: popup canceled');
-                    _setCovered(false);
-                  },
+                  onCanceled: () => _setCovered(false),
                   onSelected: (action) async {
-                    browserPanelTrace('popup workspace selected $action', stack: true);
                     _setCovered(false);
                     switch (action) {
                       case 'new':

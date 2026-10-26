@@ -12,7 +12,6 @@ import 'package:flutter_hbb/models/platform_model.dart';
 import 'package:uuid/uuid.dart';
 
 import 'browser_workspace_page.dart';
-import '../browser/browser_panel_diagnostics.dart';
 
 const _browserChannel = MethodChannel('rustdesk/remote-browser');
 bool _browserOpening = false;
@@ -68,7 +67,6 @@ class _RemoteBrowserPageState extends State<RemoteBrowserPage> {
   @override
   void initState() {
     super.initState();
-    browserPanelTrace('legacy browser init', stack: true);
     _overlay.applyFfi(_ffi);
     WidgetsBinding.instance.addPostFrameCallback((_) => _start());
   }
@@ -138,10 +136,7 @@ class _RemoteBrowserPageState extends State<RemoteBrowserPage> {
         'peer': widget.peer,
         if (widget.url != null) 'url': widget.url,
       });
-      if (mounted && !_transportClosed) {
-        browserPanelTrace('legacy browser native returned; popping', stack: true);
-        Navigator.of(context).pop();
-      }
+      if (mounted && !_transportClosed) Navigator.of(context).pop();
     } catch (error) {
       if (mounted) setState(() => _message = error.toString());
     } finally {
