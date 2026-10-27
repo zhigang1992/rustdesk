@@ -103,7 +103,7 @@ class _ConnectionPageState extends State<ConnectionPage> {
           _buildRemoteIDTextField(),
           if (_workspaceDev) SwitchListTile(
             title: const Text('Browser workspace preview'),
-            subtitle: const Text('Dev only · browser-first startup'),
+            subtitle: const Text('Preview · browser-first startup'),
             value: browserWorkspaces.enabled,
             onChanged: (enabled) async {
               await browserWorkspaces.optIn(enabled);

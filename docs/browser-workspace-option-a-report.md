@@ -2,6 +2,8 @@
 
 Current review state: the workspace implementation and follow-up UI fixes are complete through `e1a82bea8`. Physical iPad Air testing confirmed that the host picker, tabs, bookmarks and workspace menu stay open after the synthetic status-bar tap fix. The clean signed Dev build was installed; its automatic relaunch timed out. The sections below preserve the original implementation and installation checkpoints; their pending-acceptance statements are superseded only by the specific results in the final validation section.
 
+TestFlight preview builds can also expose the existing opt-in by passing `RUSTDESK_BROWSER_WORKSPACE_PREVIEW=YES` to the iOS archive command. This expands into the app's `RustDeskBrowserWorkspacePreview` Info.plist value; absent the flag, the original Dev-bundle gate remains. Internal TestFlight build 1.5.1 (73) uses this flag with the existing `app.reily.rustdesk` identity. Testers enable **Connections → Browser workspace preview** to enter the new shell. The release preparation passed Swift typechecking and all 56 selected Flutter tests. This setting enables preview availability, not automatic user opt-in.
+
 Application source commit: `17997209f252801368e5ed9256d5a62ad5d7ff2e`, based on `bb1a75cb1` on the Remote-Browser branch. This report records implementation and local validation; physical-device acceptance remains with the coordinator.
 
 ## Delivered behavior

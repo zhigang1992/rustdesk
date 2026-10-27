@@ -7,6 +7,11 @@ final class RemoteBrowserPlugin: NSObject, FlutterPlugin {
     private var workspaces: [String: AnyObject] = [:]
     private var identities: [String: String] = [:]
 
+    private var isWorkspacePreviewBuild: Bool {
+        Bundle.main.bundleIdentifier?.hasSuffix(".dev") == true ||
+            Bundle.main.object(forInfoDictionaryKey: "RustDeskBrowserWorkspacePreview") as? String == "YES"
+    }
+
     static func register(with registrar: FlutterPluginRegistrar) {
         let plugin = RemoteBrowserPlugin()
         let channel = FlutterMethodChannel(name: "rustdesk/remote-browser", binaryMessenger: registrar.messenger())
@@ -19,7 +24,7 @@ final class RemoteBrowserPlugin: NSObject, FlutterPlugin {
         if call.method == "workspaceSettings" {
             var supported = false
             if #available(iOS 17.0, *) { supported = true }
-            let dev = supported && Bundle.main.bundleIdentifier?.hasSuffix(".dev") == true
+            let dev = supported && isWorkspacePreviewBuild
             if dev, let args = call.arguments as? [String: Any], let enabled = args["enabled"] as? Bool {
                 UserDefaults.standard.set(enabled, forKey: "remote-browser.workspace.enabled")
             }
@@ -31,9 +36,9 @@ final class RemoteBrowserPlugin: NSObject, FlutterPlugin {
             UserDefaults.standard.set(saved, forKey: "remote-browser.workspaces.v1"); result(nil); return
         }
         if call.method.hasPrefix("workspace") && call.method != "workspaceSettings" {
-            guard #available(iOS 17.0, *), Bundle.main.bundleIdentifier?.hasSuffix(".dev") == true,
+            guard #available(iOS 17.0, *), isWorkspacePreviewBuild,
                   let args = call.arguments as? [String: Any], let id = args["workspace"] as? String else {
-                result(FlutterError(code: "unavailable", message: "Browser workspace is available in iOS Dev builds only.", details: nil)); return
+                result(FlutterError(code: "unavailable", message: "Browser workspace preview is unavailable in this build.", details: nil)); return
             }
             if call.method == "workspaceSaveTabs", let identity = args["peerIdentity"] as? String,
                let urls = args["urls"] as? [String], workspaces[id] == nil {

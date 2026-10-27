@@ -8,6 +8,8 @@
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
     <key>CFBundleDisplayName</key>
     <string>$(RUSTDESK_DISPLAY_NAME)</string>
+    <key>RustDeskBrowserWorkspacePreview</key>
+    <string>$(RUSTDESK_BROWSER_WORKSPACE_PREVIEW)</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
