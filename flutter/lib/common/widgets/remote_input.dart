@@ -70,6 +70,7 @@ class RawTouchGestureDetectorRegion extends StatefulWidget {
   final Widget child;
   final FFI ffi;
   final bool isCamera;
+  final bool Function()? isInputEnabled;
   late final InputModel inputModel = ffi.inputModel;
   late final FfiModel ffiModel = ffi.ffiModel;
 
@@ -77,6 +78,7 @@ class RawTouchGestureDetectorRegion extends StatefulWidget {
     required this.child,
     required this.ffi,
     this.isCamera = false,
+    this.isInputEnabled,
   });
 
   @override
@@ -135,6 +137,8 @@ class _RawTouchGestureDetectorRegionState
   InputModel get inputModel => widget.inputModel;
   bool get handleTouch => (isDesktop || isWebDesktop) || ffiModel.touchMode;
   SessionID get sessionId => ffi.sessionId;
+  bool get _inputEnabled => widget.isInputEnabled == null ||
+      (mounted && widget.isInputEnabled!());
   bool get canvasLocked => isMobile && ffi.canvasModel.locked;
   // Mobile: two-finger drag is a right-button drag instead of zoom/pan.
   bool get twoFingerRightDrag =>
@@ -152,7 +156,7 @@ class _RawTouchGestureDetectorRegionState
   }
 
   bool isNotTouchBasedDevice() {
-    return !kTouchBasedDeviceKinds.contains(lastDeviceKind);
+    return !_inputEnabled || !kTouchBasedDeviceKinds.contains(lastDeviceKind);
   }
 
   // Mobile, mouse mode.
@@ -196,6 +200,7 @@ class _RawTouchGestureDetectorRegionState
         final isMoved = await ffi.cursorModel.move(dx, dy);
         if (isMoved) {
           await Future.delayed(_kPressAfterMoveDelay);
+          if (!_inputEnabled) return;
           // If pan already handled 'down', don't send it again.
           if (lastTapDownDetails != null && !panStarted) {
             await inputModel.tapDown(MouseButtons.left);
@@ -208,7 +213,9 @@ class _RawTouchGestureDetectorRegionState
 
   // Runs [action] only after earlier touch-mode moves and clicks have been sent.
   Future<void> _sendTouchInOrder(Future<void> Function() action) {
-    final result = _touchSendChain.then((_) => action());
+    final result = _touchSendChain.then((_) async {
+      if (_inputEnabled) await action();
+    });
     _touchSendChain = result.then((_) {}, onError: (Object e, StackTrace _) {
       debugPrint('touch send failed: $e');
     });
@@ -266,6 +273,7 @@ class _RawTouchGestureDetectorRegionState
       }
     }
     await inputModel.tap(MouseButtons.left);
+    if (!_inputEnabled) return;
     await inputModel.tap(MouseButtons.left);
   }
 
@@ -284,6 +292,7 @@ class _RawTouchGestureDetectorRegionState
       if (ffiModel.isPeerMobile) {
         await ffi.cursorModel
             .move(_cacheLongPressPosition.dx, _cacheLongPressPosition.dy);
+        if (!_inputEnabled) return;
         await inputModel.tapDown(MouseButtons.left);
       }
     } else {
@@ -317,6 +326,7 @@ class _RawTouchGestureDetectorRegionState
           return;
         }
       }
+      if (!_inputEnabled) return;
       await inputModel.tap(MouseButtons.right);
     } else {
       // It's better to send a message to tell the controlled device that the long press event is triggered.
@@ -408,6 +418,7 @@ class _RawTouchGestureDetectorRegionState
     final tapPos = lastTapDownDetails?.localPosition;
     await _sendTouchInOrder(() async {
       await _endTwoFingerRightDrag();
+      if (!_inputEnabled) return;
       if (handleTouch) {
         if (tapPos != null) {
           await ffi.cursorModel.move(tapPos.dx, tapPos.dy);
@@ -441,8 +452,10 @@ class _RawTouchGestureDetectorRegionState
         }
         // In relative mouse mode, skip mouse down - only send movement via sendMobileRelativeMouseMove
         if (!inputModel.relativeMouseMode.value) {
+          if (!_inputEnabled) return;
           await inputModel.sendMouse('down', MouseButtons.left);
         }
+        if (!_inputEnabled) return;
         await ffi.cursorModel.move(local.dx, local.dy);
       } else {
         final offset = ffi.cursorModel.offset;
@@ -464,10 +477,12 @@ class _RawTouchGestureDetectorRegionState
     _touchModePendingPosition = current;
     await ffi.cursorModel.move(start.dx, start.dy);
     await Future.delayed(_kPressAfterMoveDelay);
+    if (!_inputEnabled) return;
     if (gen != _touchModePressGen || !_touchModePressPending) return;
     _touchModePressPending = false;
     _touchModeLeftPressed = true;
     await inputModel.sendMouse('down', MouseButtons.left);
+    if (!_inputEnabled) return;
     await ffi.cursorModel
         .move(_touchModePendingPosition.dx, _touchModePendingPosition.dy);
   }
@@ -583,9 +598,10 @@ class _RawTouchGestureDetectorRegionState
     }
     // The fingers may have lifted while awaiting; pressing now would leave
     // the right button held after its release was already sent.
-    if (gen != _twoFingerRightDragGen || !_twoFingerRightDragActive) return;
+    if (!_inputEnabled || gen != _twoFingerRightDragGen || !_twoFingerRightDragActive) return;
     _twoFingerRightDragPressPending = false;
     await inputModel.sendMouse('down', MouseButtons.right);
+    if (!_inputEnabled) return;
     if (absolute) {
       await ffi.cursorModel.move(_twoFingerRightDragLatestFocalPoint.dx,
           _twoFingerRightDragLatestFocalPoint.dy);

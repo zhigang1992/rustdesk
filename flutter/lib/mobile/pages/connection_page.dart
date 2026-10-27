@@ -18,6 +18,8 @@ import '../../models/model.dart';
 import '../../models/platform_model.dart';
 import 'home_page.dart';
 import 'remote_browser_page.dart';
+import 'browser_workspace_page.dart';
+import '../browser/browser_workspace_controller.dart';
 
 /// Connection page for connecting to a remote peer.
 class ConnectionPage extends StatefulWidget implements PageShape {
@@ -47,6 +49,7 @@ class _ConnectionPageState extends State<ConnectionPage> {
 
   final AllPeersLoader _allPeersLoader = AllPeersLoader();
   bool _browserAvailable = false;
+  bool _workspaceDev = false;
 
   StreamSubscription? _uniLinksSubscription;
 
@@ -66,8 +69,12 @@ class _ConnectionPageState extends State<ConnectionPage> {
     super.initState();
     _allPeersLoader.init(setState);
     if (isIOS) {
-      remoteBrowserAvailable().then((available) {
-        if (mounted) setState(() => _browserAvailable = available);
+      remoteBrowserAvailable().then((available) async {
+        await browserWorkspaces.initialize();
+        if (mounted) setState(() {
+          _browserAvailable = available;
+          _workspaceDev = available && browserWorkspaces.dev;
+        });
       });
     }
     _idFocusNode.addListener(onFocusChanged);
@@ -94,6 +101,18 @@ class _ConnectionPageState extends State<ConnectionPage> {
           if (!bind.isCustomClient() && !isIOS)
             Obx(() => _buildUpdateUI(stateGlobal.updateUrl.value)),
           _buildRemoteIDTextField(),
+          if (_workspaceDev) SwitchListTile(
+            title: const Text('Browser workspace preview'),
+            subtitle: const Text('Preview · browser-first startup'),
+            value: browserWorkspaces.enabled,
+            onChanged: (enabled) async {
+              await browserWorkspaces.optIn(enabled);
+              if (mounted) setState(() {});
+              if (enabled) await openBrowserWorkspace();
+            }),
+          if (_workspaceDev && browserWorkspaces.enabled) TextButton.icon(
+            onPressed: () => openBrowserWorkspace(), icon: const Icon(Icons.tab),
+            label: const Text('Open browser workspace')),
           if (_browserAvailable)
             Obx(() => TextButton.icon(
                 onPressed: _idEmpty.value

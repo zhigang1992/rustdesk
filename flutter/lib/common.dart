@@ -35,6 +35,7 @@ import 'mobile/pages/remote_page.dart';
 import 'mobile/pages/view_camera_page.dart';
 import 'mobile/pages/terminal_page.dart';
 import 'mobile/pages/remote_browser_page.dart';
+import 'mobile/pages/browser_workspace_page.dart';
 import 'models/remote_browser_link.dart';
 import 'desktop/pages/remote_page.dart' as desktop_remote;
 import 'desktop/pages/file_manager_page.dart' as desktop_file_manager;
@@ -701,7 +702,13 @@ String formatDurationToTime(Duration duration) {
   return "${totalTime.toString().padLeft(2, "0")}:${mins.toString().padLeft(2, "0")}:${secs.toString().padLeft(2, "0")}";
 }
 
+VoidCallback? mobileWorkspaceCloseHandler;
+
 closeConnection({String? id}) {
+  if (isIOS && mobileWorkspaceCloseHandler != null) {
+    mobileWorkspaceCloseHandler!();
+    return;
+  }
   if (isAndroid || isIOS) {
     () async {
       await SystemChrome.setEnabledSystemUIMode(SystemUiMode.manual,
@@ -2612,6 +2619,13 @@ connect(BuildContext context, String id,
   forceRelay = id != oldId || forceRelay;
   assert(!(isFileTransfer && isTcpTunneling && isRDP),
       "more than one connect type");
+
+  if (isIOS && !isFileTransfer && !isViewCamera && !isTerminal &&
+      !isTcpTunneling && !isRDP && await browserWorkspaceEnabled()) {
+    await openBrowserWorkspaceDesktop(id, password: password,
+        isSharedPassword: isSharedPassword, forceRelay: forceRelay);
+    return;
+  }
 
   if (isDesktop) {
     if (desktopType == DesktopType.main) {

@@ -76,9 +76,17 @@ class RemotePage extends StatefulWidget {
       required this.id,
       this.password,
       this.isSharedPassword,
-      this.forceRelay})
+      this.forceRelay,
+      this.embedded = false,
+      this.inputEnabled = true,
+      this.onEmbeddedClose,
+      this.onEmbeddedDisposed})
       : super(key: key);
 
+  final bool embedded;
+  final bool inputEnabled;
+  final VoidCallback? onEmbeddedClose;
+  final VoidCallback? onEmbeddedDisposed;
   final String id;
   final String? password;
   final bool? isSharedPassword;
@@ -138,12 +146,12 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _hideRemoteSystemUi();
       gFFI.dialogManager
-          .showLoading(translate('Connecting...'), onCancel: closeConnection);
+          .showLoading(translate('Connecting...'), onCancel: widget.embedded ? widget.onEmbeddedClose : closeConnection);
     });
     WakelockManager.enable(_uniqueKey);
-    _physicalFocusNode.requestFocus();
+    if (widget.inputEnabled) _physicalFocusNode.requestFocus();
     HardwareKeyboard.instance.addHandler(_handleLocalKeyEvent);
-    gFFI.inputModel.listenToMouse(true);
+    gFFI.inputModel.listenToMouse(widget.inputEnabled);
     gFFI.qualityMonitorModel.checkShowQualityMonitor(sessionId);
     keyboardSubscription =
         keyboardVisibilityController.onChange.listen(onSoftKeyboardChanged);
@@ -190,6 +198,35 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
   }
 
   @override
+  void didUpdateWidget(covariant RemotePage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.embedded && oldWidget.inputEnabled != widget.inputEnabled) {
+      if (!widget.inputEnabled) {
+        _iosKeyboardWorkaroundTimer?.cancel();
+        _timer?.cancel();
+        _mobileFocusNode.unfocus();
+        _physicalFocusNode.unfocus();
+        _keyboardWanted = false;
+        _showEdit = false;
+        _softKeyboardShown = false;
+        inputModel.enterOrLeave(false);
+        inputModel.releaseModifiersOnRemote();
+        for (final button in [MouseButtons.left, MouseButtons.right, MouseButtons.wheel]) {
+          inputModel.sendMouse('up', button);
+        }
+        gFFI.invokeMethod('enable_soft_keyboard', false);
+        gFFI.dialogManager.hideMobileActionsOverlay(store: false);
+      }
+      inputModel.listenToMouse(widget.inputEnabled);
+    }
+  }
+
+  void _requestClose() {
+    if (widget.embedded) { widget.onEmbeddedClose?.call(); }
+    else { clientClose(sessionId, gFFI); }
+  }
+
+  @override
   Future<void> dispose() async {
     HardwareKeyboard.instance.removeHandler(_handleLocalKeyEvent);
     WidgetsBinding.instance.removeObserver(this);
@@ -226,11 +263,12 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     // The inner logic of `on_voice_call_closed` will check if the voice call is active.
     // Only one client is considered here for now.
     gFFI.chatModel.onVoiceCallClosed("End connection");
+    widget.onEmbeddedDisposed?.call();
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) {
+    if (state == AppLifecycleState.resumed && widget.inputEnabled) {
       trySyncClipboard();
       _hideRemoteSystemUi();
     }
@@ -238,7 +276,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
 
   /// iOS only honors this when status-bar appearance is view-controller based.
   void _hideRemoteSystemUi() {
-    if (_showEdit) return;
+    if (widget.embedded || _showEdit) return;
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
   }
 
@@ -297,6 +335,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
       );
 
   void onSoftKeyboardChanged(bool visible) {
+    if (widget.embedded && (!mounted || !widget.inputEnabled)) return;
     if (visible) {
       _softKeyboardShown = true;
       _iosKeyboardWorkaroundTimer?.cancel();
@@ -330,10 +369,10 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     if (isIOS) {
       _iosKeyboardWorkaroundTimer?.cancel();
       _iosKeyboardWorkaroundTimer = Timer(Duration(milliseconds: 100), () {
-        if (!mounted || _showEdit) return;
+        if (!mounted || _showEdit || !widget.inputEnabled) return;
         _physicalFocusNode.unfocus();
         _iosKeyboardWorkaroundTimer = Timer(Duration(milliseconds: 50), () {
-          if (!mounted || _showEdit) return;
+          if (!mounted || _showEdit || !widget.inputEnabled) return;
           _physicalFocusNode.requestFocus();
         });
       });
@@ -518,6 +557,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
 
   @override
   Widget build(BuildContext context) {
+    if (widget.embedded && !widget.inputEnabled) return const SizedBox.shrink();
     // The visibility plugin can stay true after the keyboard closes and would
     // leave the key bar and status bar up. Follow the toggle instead.
     final keyboardIsVisible = _showEdit;
@@ -527,7 +567,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
 
     return WillPopScope(
       onWillPop: () async {
-        clientClose(sessionId, gFFI);
+        _requestClose();
         return false;
       },
       child: Scaffold(
@@ -597,6 +637,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                                         : RawTouchGestureDetectorRegion(
                                             child: getBodyForMobile(),
                                             ffi: gFFI,
+                                            isInputEnabled: widget.embedded ? () => mounted && widget.inputEnabled : null,
                                           ),
                                   );
                                 }),
@@ -615,7 +656,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     );
   }
 
-  bool _handleLocalKeyEvent(KeyEvent event) => handleMobileLocalKeyEvent(event,
+  bool _handleLocalKeyEvent(KeyEvent event) => widget.inputEnabled && handleMobileLocalKeyEvent(event,
       remoteFocused: _physicalFocusNode.hasPrimaryFocus, inputModel: inputModel);
   bool _padIsOn(PadButton b) {
     switch (b.appAction) {
@@ -657,6 +698,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
   }
 
   void _onControlPadPress(PadButton b, bool down) {
+    if (widget.embedded && !widget.inputEnabled && down) return;
     if (!down) return;
     switch (b.actionKind) {
       case PadActionKind.appAction:
@@ -701,7 +743,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
             showOptions(context, widget.id, gFFI.dialogManager);
             break;
           case PadAppAction.disconnect:
-            clientClose(sessionId, gFFI);
+            _requestClose();
             break;
           case PadAppAction.more:
             setState(() => _showEdit = false);
@@ -854,7 +896,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                       color: Colors.white,
                       icon: Icon(Icons.clear),
                       onPressed: () {
-                        clientClose(sessionId, gFFI);
+                        _requestClose();
                       },
                     ),
                     IconButton(
