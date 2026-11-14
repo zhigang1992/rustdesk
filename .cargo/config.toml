@@ -7,7 +7,14 @@ rustflags = ["-Ctarget-feature=+crt-static"]
 [target.'cfg(target_os="macos")']
 rustflags = [
     "-C", "link-args=-sectcreate __CGPreLoginApp __cgpreloginapp /dev/null",
+    # Xcode 27.2's ld writes a mis-aligned LINKEDIT string pool when it emits chained
+    # fixups (deployment target >= 12), which dlopen and later links reject.
+    "-C", "link-arg=-Wl,-no_fixup_chains",
 ]
+[env]
+# rustc otherwise links aarch64-apple-ios for iOS 10, where ___chkstk_darwin (used by
+# libaom) does not exist; matches the Runner target.
+IPHONEOS_DEPLOYMENT_TARGET = "13.0"
 #[target.'cfg(target_os="linux")']
 # glibc-static required, this may fix https://github.com/rustdesk/rustdesk/issues/9103, but I do not want this big change
 # this is unlikely to help also, because the other so files still use libc dynamically
