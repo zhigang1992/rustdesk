@@ -15,9 +15,6 @@ import AVFoundation
   ) -> Bool {
     flutterEngine.run()
     GeneratedPluginRegistrant.register(with: flutterEngine)
-    if let browserRegistrar = flutterEngine.registrar(forPlugin: "RemoteBrowserPlugin") {
-      RemoteBrowserPlugin.register(with: browserRegistrar)
-    }
     do {
       // Mix remote audio with other apps while still respecting silent mode.
       try AVAudioSession.sharedInstance().setCategory(.ambient)
