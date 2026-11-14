@@ -118,6 +118,8 @@ void main() {
     }
     expect(nativeCalls.where((call) => call.method == 'create'), hasLength(1));
     expect(nativeCalls.where((call) => call.method == 'dispose'), isEmpty);
+    tester.view.physicalSize = const Size(390, 900);
+    await tester.pumpAndSettle();
     await tester.tap(find.byIcon(Icons.expand_more));
     await tester.pumpAndSettle();
     await tester.drag(find.text('Computers'), const Offset(0, 600));
@@ -184,6 +186,35 @@ void main() {
         findsOneWidget);
     expect(tester.widget<TextField>(find.byType(TextField)).controller!.text,
         'https://draft.example/typing');
+    await closePage(tester);
+  }, variant: TargetPlatformVariant.only(TargetPlatform.iOS));
+
+  testWidgets('address favorites dismiss without replacing the website view',
+      (tester) async {
+    item.bookmarks = [
+      {'title': 'Saved site', 'url': 'https://saved.example'}
+    ];
+    await showPage(tester);
+    final web = tester.element(find.byType(UiKitView));
+    await tester.tap(find.byType(TextField));
+    await tester.pumpAndSettle();
+    expect(find.text('Favorites'), findsOneWidget);
+    expect(find.text('Saved site'), findsOneWidget);
+    expect(tester.element(find.byType(UiKitView)), same(web));
+    await tester.tap(find.byTooltip('Dismiss address suggestions'));
+    await tester.pumpAndSettle();
+    expect(find.text('Favorites'), findsNothing);
+    expect(tester.element(find.byType(UiKitView)), same(web));
+    for (final width in [390.0, 600.0, 820.0]) {
+      tester.view.physicalSize = Size(width, 900);
+      await tester.pumpAndSettle();
+      await tester.tap(find.byType(TextField));
+      await tester.pumpAndSettle();
+      expect(find.text('Saved site'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+      await tester.tap(find.byTooltip('Dismiss address suggestions'));
+      await tester.pumpAndSettle();
+    }
     await closePage(tester);
   }, variant: TargetPlatformVariant.only(TargetPlatform.iOS));
 

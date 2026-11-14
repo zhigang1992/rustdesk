@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>RustDesk — Option A implementation plan</title><style>
+:root{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#25303c;background:#f2f3f5;line-height:1.65}*{box-sizing:border-box}body{margin:0;padding:48px 24px}main{max-width:1000px;margin:auto;background:white;border:1px solid #e0e3e7;border-radius:18px;padding:48px}small,.muted{color:#66717d}h1{font-size:36px;letter-spacing:-1px;line-height:1.15;margin:12px 0 20px}h2{font-size:21px;margin:36px 0 12px}p{margin:12px 0}a{color:#275ca8}code{background:#f0f2f5;padding:2px 4px;border-radius:4px;font-size:12px;overflow-wrap:anywhere}.decision{border-left:4px solid #4e75ad;background:#f2f6fc;padding:16px 22px;margin:24px 0}.diagram{font-family:ui-monospace,monospace;background:#f6f7f8;padding:20px;border-radius:10px;white-space:pre-wrap;line-height:1.8;font-size:13px}table{width:100%;border-collapse:collapse;font-size:14px}th,td{text-align:left;vertical-align:top;padding:14px 10px;border-bottom:1px solid #e5e7eb}th{color:#637080;font-size:12px;text-transform:uppercase}td:first-child{width:20%}li{margin:8px 0}.tag{font-size:11px;letter-spacing:1px;text-transform:uppercase;color:#52709b}@media(max-width:650px){body{padding:14px}main{padding:24px 18px}h1{font-size:29px}table,tbody,tr,td{display:block}thead{display:none}td{padding:8px 0;border:0}tr{border-bottom:1px solid #ddd;padding:12px 0}td:first-child{width:auto;font-weight:700}}
+</style></head><body><main>
+<div class="tag">RustDesk · Planning draft · 26 October 2026</div>
+<h1>Option A: a browser workspace for each computer</h1>
+<p>Selected direction: a compact horizontal tab strip, with the address field inside the selected website tab. Website tabs and a screen-sharing tab belong to one computer workspace. The computer picker switches the whole workspace.</p>
+<p><a href="https://share.onorca.dev/a/C6oW8OzWIwJf">View the interactive mockups</a> — select A, Browser-first.</p>
+<div class="decision"><strong>Recommended first delivery:</strong> iOS and iPadOS, behind a Dev-only opt-in until validated. Keep the existing Mac host and routing protocol. Deliver the browser shell first, then integrate the Flutter desktop as a tab. Production implementation has not started.</div>
+<h2>Product behavior</h2>
+<ul>
+<li>Launch into the last-used computer workspace and a New tab page. If no computer is saved, show Add computer within that page. Restore the workspace before connecting; connect when a remote page or desktop needs it, using existing authentication.</li>
+<li>One compact app toolbar above content. On iPad: Back, Forward, tabs, New tab, bookmark and menu actions. The selected tab expands into the address field and contains the computer chip. Inactive tabs show page titles and a close action. Screen sharing shows a monitor icon and “Desktop.”</li>
+<li>On narrow iPhone layouts, keep the same concept with the selected address, Back, tab count and menu. Put other tabs in the overview and secondary actions in the menu. Do not compress every desktop control into tiny buttons.</li>
+<li>Switching computers restores that computer’s selected tab, website views, bookmarks and in-memory Back/Forward stacks. Editing a URL navigates only the selected website tab. It never changes the computer.</li>
+<li>A New tab page contains favorites, recent pages and an Open desktop action for the current computer. Adding or switching computers is available from the computer picker.</li>
+<li>Desktop selection disables website navigation controls. Switching away keeps its connection, but releases remote input focus, keyboard capture and active gestures. Closing Desktop ends only screen sharing. Closing the last website tab creates a blank tab in that workspace.</li>
+<li>Disconnects show an inline state with Reconnect. Saved tabs and cookies remain. No repeated automatic navigation loop and no silent direct-network fallback.</li>
+</ul>
+<h2>Architecture</h2>
+<div class="diagram">Flutter workspace shell — toolbar, tab selection, New tab, computer picker
+  ├─ Website content: native WKWebView through an iOS platform view
+  └─ Desktop content: existing Flutter RemotePage and Control Pad
+
+Workspace connection owner — dedicated existing browser FFI/tunnel session
+Native browser owner — WKWebViews, WebKit navigation, per-host website data
+Persistent workspace metadata — selected tab, saved URLs, bookmarks, recents</div>
+<p>This is a recommendation pending a device spike. Flutter supports embedding native UIKit views using platform views; the official guide also documents composition and performance trade-offs. Validate against this repository’s pinned SDK rather than introducing an SDK upgrade as part of the UI work. <a href="https://docs.flutter.dev/platform-integration/ios/platform-views">Flutter iOS platform-view documentation</a>.</p>
+<p>Flutter owns presentation metadata; WebKit remains the authority for website URL, title, loading state and Back/Forward. Exchange commands and events over the existing plugin channel, with explicit workspace/tab IDs. Do not maintain a second navigation stack in Dart. Reuse the native browser behavior and add an embedded mode with its own toolbar hidden; preserve the current modal mode as the fallback.</p>
+<p>Move browser-transport lifetime out of the transient browser route into a feature-specific workspace owner. View attachment and tab selection must not close it. Only explicit workspace disconnect or owner disposal closes its tunnel. Keep browser tunnels separate from the desktop connection, as they are today.</p>
+<h2>Implementation stages and exit criteria</h2>
+<table><thead><tr><th>Stage</th><th>Change</th><th>Exit criteria</th></tr></thead><tbody>
+<tr><td>1. Device spike</td><td>Embed existing native website content below a minimal Flutter toolbar. Switch between it and the existing desktop page. Add only the visibility/input hook required for the opt-in path.</td><td>On iPad Air: localhost login/WebCrypto, web keyboard and scrolling, desktop Control Pad, touch gestures and physical keyboard work. Hidden desktop receives no input. Browser and desktop sessions survive a switch.</td></tr>
+<tr><td>2. Website workspace</td><td>Build option A’s responsive chrome, typed tab metadata, New tab page and tab overview. Add native commands/events for selection and navigation. Retain WebKit views when switching tabs.</td><td>Several real websites, popups/new-tab links, Back/Forward, editable address, reload/stop, bookmark and close behave correctly without extra permanent bars.</td></tr>
+<tr><td>3. Computer switching</td><td>Retain browser connections and native website views per workspace. Wire saved peers and existing authentication to the picker. Add explicit connection/reconnect states.</td><td>Two hosts serving the same localhost URL show their own content. Switching restores the right tab and navigation stack. Closing/disconnecting one workspace leaves the other intact.</td></tr>
+<tr><td>4. Desktop tab</td><td>Integrate the existing desktop view beneath the shell. Keep its current Control Pad, keyboard, touch behavior and explicit end-session action. Gate input when the tab is hidden.</td><td>Switch website → desktop → website without reconnecting. Closing Desktop leaves browsing alive. Closing a website leaves Desktop alive. Remote input never leaks from the address bar or hidden desktop.</td></tr>
+<tr><td>5. Persistence and launch</td><td>Restore the workspace and saved tab metadata on launch. Preserve current profile IDs, cookies and bookmarks. Route browser deep links into the correct workspace/tab. Make this the opt-in iOS start screen.</td><td>Existing installations retain logins/bookmarks/tabs. A deep link opens in the requested computer. Restart restores URLs and selection without assuming live desktop sessions survived.</td></tr>
+<tr><td>6. Device validation</td><td>Exercise iPad Air and iPhone layouts, orientation, hardware keyboard, background/foreground, reconnect and memory-pressure recovery. Complete the final regression-surface review.</td><td>Local Dev build passes the acceptance checks below; existing default and unsupported-platform paths retain their previous behavior. Release remains a separate decision.</td></tr>
+</tbody></table>
+<h2>Persistence and compatibility</h2>
+<p>The current native implementation already isolates website data using <code>profileID(for: peerIdentity)</code> and saves tabs/bookmarks under that identity. Keep that exact mapping and migrate tab metadata additively. Do not replace it with a display name, IP address or a new UUID scheme. These are this app’s browser cookies; they are not the Mac’s Safari/Chrome cookies.</p>
+<p>Retained WKWebViews preserve Back/Forward during normal tab/workspace switches. The current persisted state stores URLs, not full navigation stacks. First-release restart recovery promises URLs, selected tab, bookmarks and website data; full Back/Forward history across process termination is outside that promise. A recent-pages list is separate from WebKit’s live navigation stack.</p>
+<p>Keep existing iOS availability checks. Remote browsing currently starts at iOS 17; the loopback routing extension uses an iOS 18.4 capability. This redesign must not imply broader localhost support or raise the entire app’s minimum deployment target.</p>
+<h2>First-release limits</h2>
+<ul>
+<li><strong>One live screen-sharing session across the app.</strong> Mobile RemotePage uses global <code>gFFI</code>. Switching computer workspaces can leave the current desktop connected but hidden. Opening another computer’s desktop must ask to end the existing one. Supporting concurrent desktops requires a separately scoped session-isolation change.</li>
+<li>Website tabs for different computers remain isolated. Apply the existing tab cap to each native workspace and validate memory use with two realistic workspaces. If WebKit terminates a content process, recover the selected page with a clear reload state; do not promise an intact live history after eviction.</li>
+<li>Focus on iOS/iPadOS. The Mac remains the host. A Mac browser client with the same shell needs a macOS WebKit adapter and separate validation later.</li>
+<li>No browser sync, extensions UI, download manager, incognito mode, system VPN, or proxy-protocol redesign in this delivery.</li>
+</ul>
+<h2>Expected regression surface</h2>
+<table><thead><tr><th>Existing file/path</th><th>Why it changes</th></tr></thead><tbody>
+<tr><td><code>RemoteBrowserViewController.swift</code></td><td>Provide an embedded mode, expose native tab state/commands and preserve WebKit behavior and existing profile keys.</td></tr>
+<tr><td><code>RemoteBrowserPlugin.swift</code></td><td>Register the native content view and route per-workspace/tab commands and events, while retaining modal fallback.</td></tr>
+<tr><td><code>remote_browser_page.dart</code></td><td>Separate the browser tunnel owner from route lifetime and connect it to the new feature-specific workspace shell.</td></tr>
+<tr><td><code>mobile/pages/remote_page.dart</code></td><td>Opt-in embedded desktop presentation and hidden-tab input gating. Existing standalone desktop path remains the default.</td></tr>
+<tr><td><code>home_page.dart</code>, <code>connection_page.dart</code> and narrow deep-link hooks</td><td>Enter the opt-in browser workspace and preserve existing authentication/settings access and legacy entry paths.</td></tr>
+</tbody></table>
+<p>New shell widgets and workspace metadata belong in browser-specific files. No Rust host, SOCKS, alias rewriting, WebCrypto or shared protocol changes are expected. If the spike exposes a required change there, rescope it before implementation.</p>
+<h2>Acceptance checks</h2>
+<ul>
+<li>Real iPad Air: Google and the existing <code>http://localhost:50100/login/phone</code> verification flow still work, including cookies, redirects, API calls and WebCrypto.</li>
+<li>Two computer workspaces with identical localhost addresses do not mix content, cookies, bookmarks or recent pages. Reconnect retains the same profile.</li>
+<li>Desktop keyboard, Control Pad and touch optimizations continue working; typing in a web form/address or switching tabs sends nothing to the remote desktop.</li>
+<li>Existing saved tabs/bookmarks survive upgrade; desktop sessions never reconnect automatically solely because persisted metadata exists.</li>
+<li>Use focused Flutter tests for workspace selection, close behavior and deep-link routing; run existing browser link and routing tests. Validate native composition and real networking on device without adding a new test framework.</li>
+</ul>
+<p class="muted">Implementation order: prove native/Flutter composition first → deliver browser-only A → add workspace switching → add desktop tabs → make it the opt-in launch experience. Review the final diff for each stage; keep unrelated paths unchanged.</p>
+</main></body></html>

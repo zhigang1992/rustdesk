@@ -1,5 +1,25 @@
 # Option A iOS browser workspace implementation
 
+## Mac host rollback (2026-10-29)
+
+At the user's request after connection failures, restored the original `/Applications/RustDesk.app` 1.5.1 (69) host. Stopped the Dev server/UI, disabled `app.reily.rustdesk.dev.server`, moved its LaunchAgent plist out of LaunchAgents into `~/Library/Application Support/RemoteBrowserHostRollback/`, and re-enabled/bootstrapped `com.carriez.RustDesk_server`. Verified the original server PID 74254 owns TCP port 21118. The original service will start at login. No source changes, configuration resets, or end-to-end connection success are claimed by this rollback. This supersedes the host refresh below.
+
+## Mac host refresh (2026-10-29)
+
+The installed build 69 host had returned via `com.carriez.RustDesk_server` after login. Built the current Rust native library with `flutter,hwcodec,unix-file-copy-paste,screencapturekit`, rebuilt the macOS Debug app as 1.5.1 (73), and installed it at `/Applications/RustDesk Dev.app`. Deep/strict signature verification passed; packaged native UUID `440E6A0B-FCD0-3C80-A2AB-76427FDFCA3A` matches the fresh Cargo library.
+
+Disabled and unloaded the old per-user launch service, preserving `/Applications/RustDesk.app`. Added `~/Library/LaunchAgents/app.reily.rustdesk.dev.server.plist` so the new host starts at login. Verified PID 44442 runs the installed Dev executable, loads its native library and owns TCP port 21118; the Dev UI is also running. This verifies the current desktop/browser-capable host and listener, not a new end-to-end iPad session. No host source or repository build settings changed during this refresh.
+
+## Safari-style controls and default availability (2026-10-28)
+
+The browser workspace is now enabled for all supported iOS builds (iOS 17+), without a build flag or a saved opt-in. Connections retains an Open browser workspace entry. Existing startup, remote-browser links and desktop entry use their existing enabled-workspace paths. Unsupported platforms keep their existing routing. The preview/build-73 notes below describe historical releases.
+
+The compact toolbar uses a separate computer selector, a pill-shaped active tab with close/reload controls, and the existing stable tab order. Favorites and recent pages use tiles on the start page and in a dismissible address-focus panel. Website views remain mounted underneath. Computer, tabs and bookmarks panels use bounded dialogs on wide windows and the existing bottom sheets below 700 logical pixels. This concerns browser controls, not iPadOS multiwindow scenes.
+
+Regression surface: `RemoteBrowserPlugin.swift` removes only the build/user opt-in guards; `Info.plist` removes the obsolete preview value; `browser_workspace_controller.dart` removes the opt-in mutation and dev flag; `connection_page.dart` replaces the preview toggle with the supported-workspace entry; `browser_workspace_page.dart` changes toolbar, start-page/address panels and wide-window panel presentation. Startup and desktop routing consequently enter the existing workspace path on supported release builds. Native networking, profile storage and desktop input implementation are unchanged.
+
+Validation: Swift typechecking passed. The selected browser/input suite passed 57 tests, including an address-panel regression at phone and tablet widths; the final dialog change also passed all four browser page tests. A signed Profile build of RustDesk Dev 1.5.1 (73) passed strict signature verification and was installed and launched on the physical iPad Air on 2026-10-28; a process query confirmed the installed Runner executable running. Physical-device visual acceptance and a new TestFlight release are pending. Favorites use local generic icons, and recent pages use saved titles/hosts rather than webpage thumbnails.
+
 Current review state: the workspace implementation and follow-up UI fixes are complete through `e1a82bea8`. Physical iPad Air testing confirmed that the host picker, tabs, bookmarks and workspace menu stay open after the synthetic status-bar tap fix. The clean signed Dev build was installed; its automatic relaunch timed out. The sections below preserve the original implementation and installation checkpoints; their pending-acceptance statements are superseded only by the specific results in the final validation section.
 
 TestFlight preview builds can also expose the existing opt-in by passing `RUSTDESK_BROWSER_WORKSPACE_PREVIEW=YES` to the iOS archive command. This expands into the app's `RustDeskBrowserWorkspacePreview` Info.plist value; absent the flag, the original Dev-bundle gate remains. Internal TestFlight build 1.5.1 (73) uses this flag with the existing `app.reily.rustdesk` identity. Testers enable **Connections → Browser workspace preview** to enter the new shell. The release preparation passed Swift typechecking and all 56 selected Flutter tests. This setting enables preview availability, not automatic user opt-in.

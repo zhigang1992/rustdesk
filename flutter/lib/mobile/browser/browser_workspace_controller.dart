@@ -19,7 +19,6 @@ class BrowserWorkspaceController extends ChangeNotifier {
   final connections = <String, BrowserWorkspaceConnection>{};
   final _starting = <String>{};
   Future<void>? _initializing;
-  bool dev = false;
   bool enabled = false;
   bool presented = false;
   BrowserDesktopRequest? desktopRequest;
@@ -33,7 +32,6 @@ class BrowserWorkspaceController extends ChangeNotifier {
     try {
       final settings = await browserWorkspaceChannel
           .invokeMapMethod<String, dynamic>('workspaceSettings');
-      dev = settings?['dev'] == true;
       enabled = settings?['enabled'] == true;
       final saved = settings?['saved'] as String? ?? '';
       if (saved.isNotEmpty) model.restore(jsonDecode(saved));
@@ -56,24 +54,10 @@ class BrowserWorkspaceController extends ChangeNotifier {
         changed();
       });
     } on MissingPluginException {
-      dev = false;
+      enabled = false;
     } catch (error) {
       debugPrint('Could not restore browser workspaces: $error');
     }
-  }
-
-  Future<void> optIn(bool value) async {
-    await initialize();
-    if (!dev) return;
-    await browserWorkspaceChannel
-        .invokeMethod('workspaceSettings', {'enabled': value});
-    enabled = value;
-    if (!value) {
-      for (final connection in connections.values) {
-        await connection.close();
-      }
-    }
-    notifyListeners();
   }
 
   BrowserWorkspace select(String peer, {String? label, String? url}) {

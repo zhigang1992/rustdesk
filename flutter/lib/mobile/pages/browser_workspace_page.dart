@@ -2,7 +2,7 @@ import 'dart:async';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:flutter_hbb/common.dart';
+import 'package:flutter_hbb/common.dart' hide Dialog;
 import 'package:flutter_hbb/common/widgets/autocomplete.dart';
 import 'package:flutter_hbb/common/widgets/overlay.dart';
 import 'package:flutter_hbb/models/browser_workspace.dart';
@@ -297,7 +297,33 @@ class _BrowserWorkspacePageState extends State<BrowserWorkspacePage> {
     }
   }
 
-  Future<void> _computerPicker() => _cover(() => showModalBottomSheet<void>(
+  Future<void> _showBrowserPanel({
+    required BuildContext context,
+    required WidgetBuilder builder,
+    bool isScrollControlled = false,
+  }) {
+    if (MediaQuery.of(context).size.width < 700) {
+      return showModalBottomSheet<void>(
+          context: context,
+          isScrollControlled: isScrollControlled,
+          builder: builder);
+    }
+    return showDialog<void>(
+        context: context,
+        builder: (context) => Dialog(
+            alignment: Alignment.topRight,
+            insetPadding: const EdgeInsets.fromLTRB(16, 64, 16, 16),
+            shape:
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+            clipBehavior: Clip.antiAlias,
+            child: ConstrainedBox(
+                constraints: BoxConstraints(
+                    maxWidth: 420,
+                    maxHeight: MediaQuery.of(context).size.height * .75),
+                child: builder(context))));
+  }
+
+  Future<void> _computerPicker() => _cover(() => _showBrowserPanel(
       context: context,
       isScrollControlled: true,
       builder: (context) {
@@ -360,7 +386,7 @@ class _BrowserWorkspacePageState extends State<BrowserWorkspacePage> {
                     ])));
       }));
 
-  Future<void> _overview() => _cover(() => showModalBottomSheet<void>(
+  Future<void> _overview() => _cover(() => _showBrowserPanel(
       context: context,
       isScrollControlled: true,
       builder: (context) {
@@ -427,7 +453,7 @@ class _BrowserWorkspacePageState extends State<BrowserWorkspacePage> {
                         ]))));
       }));
 
-  Future<void> _bookmarks() => _cover(() => showModalBottomSheet<void>(
+  Future<void> _bookmarks() => _cover(() => _showBrowserPanel(
       context: context,
       builder: (context) => SafeArea(
               child: Column(children: [
@@ -504,31 +530,18 @@ class _BrowserWorkspacePageState extends State<BrowserWorkspacePage> {
         margin: const EdgeInsets.symmetric(horizontal: 2),
         decoration: BoxDecoration(
             color: Theme.of(context).colorScheme.surface,
-            borderRadius: BorderRadius.circular(9),
+            borderRadius: BorderRadius.circular(24),
             border: Border.all(color: Theme.of(context).dividerColor)),
         child: Row(children: [
-          InkWell(
-              onTap: _computerPicker,
-              borderRadius: BorderRadius.circular(8),
-              child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 8),
-                  child: Row(mainAxisSize: MainAxisSize.min, children: [
-                    Icon(
-                        item?.desktopSelected == true
-                            ? Icons.desktop_windows
-                            : Icons.computer,
-                        size: 17),
-                    if (MediaQuery.of(context).size.width >= 600) ...[
-                      const SizedBox(width: 5),
-                      ConstrainedBox(
-                          constraints: const BoxConstraints(maxWidth: 100),
-                          child: Text(item?.label ?? 'Add computer',
-                              overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(fontSize: 12)))
-                    ],
-                    const Icon(Icons.expand_more, size: 15)
-                  ]))),
-          const VerticalDivider(width: 1, indent: 8, endIndent: 8),
+          if (item != null && MediaQuery.of(context).size.width >= 700)
+            _button(Icons.close,
+                item.desktopSelected ? 'Close Desktop' : 'Close tab', () {
+              if (item.desktopSelected) {
+                _closeDesktop();
+              } else {
+                _closeTab(item, item.current);
+              }
+            }),
           Expanded(
               child: item?.desktopSelected == true
                   ? const Padding(
@@ -551,13 +564,13 @@ class _BrowserWorkspacePageState extends State<BrowserWorkspacePage> {
                       onTap: () => _address.selection = TextSelection(
                           baseOffset: 0, extentOffset: _address.text.length),
                       onSubmitted: _navigate)),
-          if (item != null && MediaQuery.of(context).size.width >= 600)
-            _button(Icons.close,
-                item.desktopSelected ? 'Close Desktop' : 'Close tab', () {
-              if (item.desktopSelected) {
-                _closeDesktop();
+          if (item != null && !item.desktopSelected && !_addressFocus.hasFocus)
+            _button(item.current.loading ? Icons.close : Icons.refresh,
+                item.current.loading ? 'Stop loading' : 'Reload', () {
+              if (owner.connections[item.peer]?.connected == true) {
+                owner.command(item, 'reload');
               } else {
-                _closeTab(item, item.current);
+                owner.connect(item);
               }
             }),
         ]));
@@ -573,6 +586,18 @@ class _BrowserWorkspacePageState extends State<BrowserWorkspacePage> {
         child: SizedBox(
             height: 52,
             child: Row(children: [
+              Tooltip(
+                  message: item?.label ?? 'Add computer',
+                  child: TextButton(
+                      onPressed: _computerPicker,
+                      style: TextButton.styleFrom(
+                          minimumSize: const Size(44, 44),
+                          padding: const EdgeInsets.symmetric(horizontal: 8)),
+                      child:
+                          const Row(mainAxisSize: MainAxisSize.min, children: [
+                        Icon(Icons.computer, size: 20),
+                        Icon(Icons.expand_more, size: 15),
+                      ]))),
               _button(
                   Icons.chevron_left,
                   'Back',
@@ -586,18 +611,6 @@ class _BrowserWorkspacePageState extends State<BrowserWorkspacePage> {
                     !desktop && connected && item?.current.forward == true
                         ? () => owner.command(item!, 'forward')
                         : null),
-                _button(
-                    item?.current.loading == true ? Icons.close : Icons.refresh,
-                    item?.current.loading == true ? 'Stop loading' : 'Reload',
-                    desktop || item == null
-                        ? null
-                        : () {
-                            if (connected) {
-                              owner.command(item, 'reload');
-                            } else {
-                              owner.connect(item);
-                            }
-                          }),
               ],
               if (compact || item == null)
                 Expanded(child: _selectedTab(item))
@@ -653,7 +666,7 @@ class _BrowserWorkspacePageState extends State<BrowserWorkspacePage> {
                 })),
               if (!compact) _button(Icons.add, 'New tab', _newTab),
               _button(
-                  Icons.tab_outlined,
+                  Icons.filter_none,
                   'Tabs (${(item?.tabs.length ?? 0) + (item != null && owner.model.desktopPeer == item.peer ? 1 : 0)})',
                   _overview),
               if (!compact)
@@ -832,37 +845,101 @@ class _BrowserWorkspacePageState extends State<BrowserWorkspacePage> {
                           ]),
                           if (item != null) ...[
                             const SizedBox(height: 30),
-                            const Text('Favorites',
-                                style: TextStyle(
-                                    fontSize: 18, fontWeight: FontWeight.w600)),
-                            if (item.bookmarks.isEmpty)
-                              const Padding(
-                                  padding: EdgeInsets.symmetric(vertical: 12),
-                                  child:
-                                      Text('Bookmark a page to keep it here.')),
-                            ...item.bookmarks.map((entry) => ListTile(
-                                contentPadding: EdgeInsets.zero,
-                                leading: const Icon(Icons.bookmark_outline),
-                                title: Text(entry['title']),
-                                subtitle: Text(entry['url'],
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis),
-                                onTap: () => _navigate(entry['url']))),
+                            _pageTiles('Favorites', item.bookmarks,
+                                Icons.bookmark_outline),
                             const SizedBox(height: 24),
-                            const Text('Recent pages',
-                                style: TextStyle(
-                                    fontSize: 18, fontWeight: FontWeight.w600)),
-                            ...item.recents.take(12).map((entry) => ListTile(
-                                contentPadding: EdgeInsets.zero,
-                                leading: const Icon(Icons.history),
-                                title: Text(entry['title']),
-                                subtitle: Text(entry['url'],
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis),
-                                onTap: () => _navigate(entry['url']))),
+                            _pageTiles('Recent pages',
+                                item.recents.take(12).toList(), Icons.history),
                           ],
                         ]))),
           ]));
+
+  Widget _addressSuggestions(BrowserWorkspace item) => Positioned.fill(
+          child: Stack(children: [
+        Positioned.fill(
+            child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: _addressFocus.unfocus,
+                child: const ColoredBox(color: Color(0x22000000)))),
+        Align(
+            alignment: Alignment.topCenter,
+            child: Padding(
+                padding: const EdgeInsets.all(12),
+                child: ConstrainedBox(
+                    constraints:
+                        const BoxConstraints(maxWidth: 680, maxHeight: 580),
+                    child: Material(
+                        elevation: 8,
+                        borderRadius: BorderRadius.circular(28),
+                        clipBehavior: Clip.antiAlias,
+                        child: ListView(
+                            shrinkWrap: true,
+                            padding: const EdgeInsets.all(24),
+                            children: [
+                              Row(children: [
+                                Expanded(
+                                    child: Text(
+                                        'Browsing through ${item.label}',
+                                        style: Theme.of(context)
+                                            .textTheme
+                                            .titleMedium)),
+                                _button(
+                                    Icons.close,
+                                    'Dismiss address suggestions',
+                                    _addressFocus.unfocus),
+                              ]),
+                              const SizedBox(height: 16),
+                              _pageTiles('Favorites', item.bookmarks,
+                                  Icons.bookmark_outline),
+                              const SizedBox(height: 24),
+                              _pageTiles(
+                                  'Recent pages',
+                                  item.recents.take(12).toList(),
+                                  Icons.history),
+                            ])))))
+      ]));
+
+  Widget _pageTiles(
+          String title, List<Map<String, dynamic>> entries, IconData icon) =>
+      Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text(title,
+            style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w600)),
+        const SizedBox(height: 16),
+        if (entries.isEmpty)
+          Text(title == 'Favorites'
+              ? 'Bookmark a page to keep it here.'
+              : 'Pages you visit appear here.'),
+        Wrap(spacing: 16, runSpacing: 16, children: [
+          for (final entry in entries)
+            SizedBox(
+                width: 132,
+                child: InkWell(
+                    borderRadius: BorderRadius.circular(18),
+                    onTap: () => _navigate(entry['url'] as String),
+                    child: Padding(
+                        padding: const EdgeInsets.all(8),
+                        child: Column(children: [
+                          Container(
+                              height: 72,
+                              width: 72,
+                              decoration: BoxDecoration(
+                                  color: Theme.of(context)
+                                      .colorScheme
+                                      .surfaceContainerHighest,
+                                  borderRadius: BorderRadius.circular(18)),
+                              child: Icon(icon, size: 32)),
+                          const SizedBox(height: 8),
+                          Text(entry['title'] as String,
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                              textAlign: TextAlign.center),
+                          Text(Uri.tryParse(entry['url'] as String)?.host ?? '',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: Theme.of(context).textTheme.bodySmall),
+                        ])))),
+        ]),
+      ]);
 
   Widget _webContent(BrowserWorkspace? item) {
     if (item == null) return _newTabPage(null);
@@ -968,6 +1045,8 @@ class _BrowserWorkspacePageState extends State<BrowserWorkspacePage> {
                               _desktopDisposed!.complete();
                           })))),
             if (item?.desktopSelected != true) _webContent(item),
+            if (_addressFocus.hasFocus && item != null && !item.desktopSelected)
+              _addressSuggestions(item),
           ])),
         ]))));
   }

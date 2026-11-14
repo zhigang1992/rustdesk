@@ -49,7 +49,7 @@ class _ConnectionPageState extends State<ConnectionPage> {
 
   final AllPeersLoader _allPeersLoader = AllPeersLoader();
   bool _browserAvailable = false;
-  bool _workspaceDev = false;
+  bool _workspaceAvailable = false;
 
   StreamSubscription? _uniLinksSubscription;
 
@@ -73,7 +73,7 @@ class _ConnectionPageState extends State<ConnectionPage> {
         await browserWorkspaces.initialize();
         if (mounted) setState(() {
           _browserAvailable = available;
-          _workspaceDev = available && browserWorkspaces.dev;
+          _workspaceAvailable = available && browserWorkspaces.enabled;
         });
       });
     }
@@ -101,16 +101,7 @@ class _ConnectionPageState extends State<ConnectionPage> {
           if (!bind.isCustomClient() && !isIOS)
             Obx(() => _buildUpdateUI(stateGlobal.updateUrl.value)),
           _buildRemoteIDTextField(),
-          if (_workspaceDev) SwitchListTile(
-            title: const Text('Browser workspace preview'),
-            subtitle: const Text('Preview · browser-first startup'),
-            value: browserWorkspaces.enabled,
-            onChanged: (enabled) async {
-              await browserWorkspaces.optIn(enabled);
-              if (mounted) setState(() {});
-              if (enabled) await openBrowserWorkspace();
-            }),
-          if (_workspaceDev && browserWorkspaces.enabled) TextButton.icon(
+          if (_workspaceAvailable) TextButton.icon(
             onPressed: () => openBrowserWorkspace(), icon: const Icon(Icons.tab),
             label: const Text('Open browser workspace')),
           if (_browserAvailable)
